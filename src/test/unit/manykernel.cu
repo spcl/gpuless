@@ -30,9 +30,6 @@ int main() {
     cudaMemcpy(d_a + N, h_a, N * sizeof(float), cudaMemcpyHostToDevice);
     cudaMemcpy(d_b + N, h_b, N * sizeof(float), cudaMemcpyHostToDevice);
 
-    //    const int n = N;
-    //    void *args[] = {&d_a, &d_b, &d_c, (void *)&n};
-    //    cudaLaunchKernel((const void *)vadd, dim3(N), dim3(1), args, 0, 0);
     vadd<<<N, 1>>>(d_a + N, d_b + N, d_c, N);
     vadd<<<N, 1>>>(d_c, d_a + N, d_c, N);
     vadd<<<N, 1>>>(d_c, d_a + N, d_c, N);
@@ -40,17 +37,18 @@ int main() {
 
     cudaMemcpy(h_c, d_c, N * sizeof(float), cudaMemcpyDeviceToHost);
 
-    printf("%f\n", h_c[0]);
-    printf("%f\n", h_c[1]);
-    printf("%f\n", h_c[2]);
-    printf("%f\n", h_c[3]);
-    printf("%f\n", h_c[4]);
-
     assert(abs(h_c[0] - 0.0) < 1e-6);
     assert(abs(h_c[1] - 5.0) < 1e-6);
     assert(abs(h_c[2] - 10.0) < 1e-6);
     assert(abs(h_c[3] - 15.0) < 1e-6);
     assert(abs(h_c[4] - 20.0) < 1e-6);
+
+    free(h_a);
+    free(h_b);
+    free(h_c);
+    cudaFree(d_a);
+    cudaFree(d_b);
+    cudaFree(d_c);
 
     return 0;
 }
