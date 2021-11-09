@@ -6,15 +6,25 @@
 #include <string>
 #include <vector>
 
-//const char ELF_MAGIC[4] = {0x7f, 'E', 'L', 'F'};
-
 enum PtxParameterType {
-    s8, s16, s32, s64,    // signed integers
-    u8, u16, u32, u64,    // unsigned integers
-    f16, f16x2, f32, f64, // floating-point
-    b8, b16, b32, b64,    // untyped bits
-    pred,                 // predicate
-    invalid,              // invalid type for signaling errors
+    s8,
+    s16,
+    s32,
+    s64, // signed integers
+    u8,
+    u16,
+    u32,
+    u64, // unsigned integers
+    f16,
+    f16x2,
+    f32,
+    f64, // floating-point
+    b8,
+    b16,
+    b32,
+    b64,     // untyped bits
+    pred,    // predicate
+    invalid, // invalid type for signaling errors
 };
 
 static std::map<std::string, PtxParameterType> str_to_ptx_paramter_type = {
@@ -41,25 +51,20 @@ struct KParamInfo {
 class CubinAnalyzer {
   private:
     bool initialized_ = false;
-    std::vector<std::string> cuda_binaries;
     std::map<std::string, std::vector<KParamInfo>> kernel_to_kparaminfos;
 
-    PtxParameterType ptxParameterTypeFromString(const std::string &str);
-    int byteSizePtxParameterType(PtxParameterType type);
+    static PtxParameterType ptxParameterTypeFromString(const std::string &str);
+    static int byteSizePtxParameterType(PtxParameterType type);
 
+    bool isCached(const std::filesystem::path &fname);
+    bool loadAnalysisFromCache(const std::filesystem::path &fname);
+    static void storeAnalysisToCache(
+        const std::filesystem::path &fname,
+        const std::map<std::string, std::vector<KParamInfo>> &data);
 
-    // CudaFileType file_type;
-//    std::map<std::string, KFunction> kernel_to_kfunction;
-//    std::map<std::string, int> kernel_to_ptx_section_idx;
-
-    // bool fileIsElf(std::filesystem::path &p);
-    // bool analyzeElf(std::string fname, int major_version, int minor_version);
-    // bool analyzeSingleElf(const std::filesystem::path &path);
-
-//    void parseSymbols(std::stringstream &ss);
     std::vector<KParamInfo> parsePtxParameters(const std::string &params);
-    bool analyzePtx(const std::filesystem::path &path,
-            int major_version, int minor_version);
+    bool analyzePtx(const std::filesystem::path &path, int major_version,
+                    int minor_version);
 
   public:
     CubinAnalyzer() = default;
