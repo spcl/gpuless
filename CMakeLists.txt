@@ -57,21 +57,21 @@ add_custom_target(
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/schemas)
 
 add_executable(manager_trace
-    trace/manager/manager.cpp
-    trace/manager/manager_device.cpp
-    trace/cuda_trace.cpp
-    trace/cuda_trace_converter.cpp
-    trace/cuda_api_calls.cpp
-    trace/cudnn_api_calls.cpp
-    trace/cublas_api_calls.cpp
-    trace/cuda_virtual_device.cpp
-    trace/cuda_virtual_device.cpp
-    trace/tcp_gpu_session.cpp
-    trace/trace_executor_local.cpp
-    trace/trace_executor_tcp_client.cpp
-    trace/dlsym_util.cpp
-    TcpClient.cpp
-    utils.cpp)
+    src/trace/manager/manager.cpp
+    src/trace/manager/manager_device.cpp
+    src/trace/cuda_trace.cpp
+    src/trace/cuda_trace_converter.cpp
+    src/trace/cuda_api_calls.cpp
+    src/trace/cudnn_api_calls.cpp
+    src/trace/cublas_api_calls.cpp
+    src/trace/cuda_virtual_device.cpp
+    src/trace/cuda_virtual_device.cpp
+    src/trace/tcp_gpu_session.cpp
+    src/trace/trace_executor_local.cpp
+    src/trace/trace_executor_tcp_client.cpp
+    src/trace/dlsym_util.cpp
+    src/TcpClient.cpp
+    src/utils.cpp)
 add_dependencies(manager_trace flatbuffer)
 target_link_libraries(manager_trace
     iberty
@@ -82,46 +82,40 @@ target_link_libraries(manager_trace
     CUDA::cublas
     pthread)
 
-if(BUILD_BENCHMARKS)
-    add_subdirectory(
-        ${CMAKE_SOURCE_DIR}/benchmarks/resnet50
-        ${CMAKE_SOURCE_DIR}/benchmarks/resnet50)
-endif()
-
 add_library(analysis SHARED
-    analysis/libcudaanalysis.cpp
-    trace/cubin_analysis.cpp
-    utils.cpp trace/trace_executor.hpp)
+    src/analysis/libcudaanalysis.cpp
+    src/trace/cubin_analysis.cpp
+    src/utils.cpp src/trace/trace_executor.hpp)
 target_link_libraries(analysis
     CUDA::cudart
     CUDA::cuda_driver)
 
 add_library(argument_analysis SHARED
-        argument_analysis/libarganalysis.cpp
-        trace/cubin_analysis.cpp
-        utils.cpp trace/trace_executor.hpp)
+        src/argument_analysis/libarganalysis.cpp
+        src/trace/cubin_analysis.cpp
+        src/utils.cpp src/trace/trace_executor.hpp)
 target_link_libraries(argument_analysis
         CUDA::cudart
         CUDA::cuda_driver)
 
 add_library(gpuless SHARED
-    trace/libgpuless.cpp
-    trace/hijack_cudnn.cpp
-    trace/hijack_cublas.cpp
-    trace/cuda_trace.cpp
-    trace/cuda_trace_converter.cpp
-    trace/cuda_api_calls.cpp
-    trace/cudnn_api_calls.cpp
-    trace/cublas_api_calls.cpp
-    trace/cuda_virtual_device.cpp
-    trace/cuda_virtual_device.cpp
-    trace/tcp_gpu_session.cpp
-    trace/trace_executor_local.cpp
-    trace/trace_executor_tcp_client.cpp
-    trace/dlsym_util.cpp
-    TcpClient.cpp
-    utils.cpp
-    trace/cubin_analysis.cpp)
+    src/trace/libgpuless.cpp
+    src/trace/hijack_cudnn.cpp
+    src/trace/hijack_cublas.cpp
+    src/trace/cuda_trace.cpp
+    src/trace/cuda_trace_converter.cpp
+    src/trace/cuda_api_calls.cpp
+    src/trace/cudnn_api_calls.cpp
+    src/trace/cublas_api_calls.cpp
+    src/trace/cuda_virtual_device.cpp
+    src/trace/cuda_virtual_device.cpp
+    src/trace/tcp_gpu_session.cpp
+    src/trace/trace_executor_local.cpp
+    src/trace/trace_executor_tcp_client.cpp
+    src/trace/dlsym_util.cpp
+    src/TcpClient.cpp
+    src/utils.cpp
+    src/trace/cubin_analysis.cpp)
 target_link_libraries(gpuless
     iberty
     stdc++fs
