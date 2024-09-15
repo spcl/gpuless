@@ -4,6 +4,8 @@ project(gpuless)
 enable_language(CUDA)
 find_package(CUDAToolkit 11.4)
 
+set(CUDNN_DIR "" CACHE STRING "")
+
 option(BUILD_BENCHMARKS "Build the resnet50 benchmark" OFF)
 
 option(SPDLOG_LEVEL_INFO "Set the spdlog level to info" OFF)
@@ -35,8 +37,11 @@ link_directories(${CMAKE_SOURCE_DIR}/lib)
 cmake_host_system_information(RESULT _hostname QUERY HOSTNAME)
 if (${_hostname} MATCHES ".*\.cscs\.ch")
     add_compile_options(-DCSCS)
-    include_directories($ENV{HOME}/cudnn/include)
-    link_directories($ENV{HOME}/cudnn/lib64)
+    include_directories(${CUDNN_DIR}/cudnn/include)
+    link_directories(${CUDNN_DIR}/cudnn/lib64)
+else()
+    include_directories(${CUDNN_DIR}/cudnn/include)
+    link_directories(${CUDNN_DIR}/cudnn/lib)
 endif()
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -54,7 +59,7 @@ set(CMAKE_CUDA_RUNTIME_LIBRARY Shared)
 add_custom_target(
     flatbuffer
     COMMAND make
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/schemas)
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/src/schemas)
 
 add_executable(manager_trace
     src/trace/manager/manager.cpp
