@@ -26,7 +26,10 @@ static size_t &getBytesReceived() {
 
 std::vector<uint8_t> recv_buffer(int socket_fd) {
     size_t msg_len;
-    recv(socket_fd, &msg_len, sizeof(msg_len), 0);
+    size_t read_bytes = recv(socket_fd, &msg_len, sizeof(msg_len), 0);
+    if(read_bytes == 0)
+        return std::vector<uint8_t>{};
+
     std::vector<uint8_t> buf(msg_len);
     size_t bytes_read = 0;
     do {
