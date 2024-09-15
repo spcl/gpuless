@@ -87,6 +87,32 @@ target_link_libraries(manager_trace
     CUDA::cublas
     pthread)
 
+add_executable(manager_device
+    src/trace/manager/manager_device_cli.cpp
+    src/trace/manager/manager_device.cpp
+    src/trace/cuda_trace.cpp
+    src/trace/cuda_trace_converter.cpp
+    src/trace/cuda_api_calls.cpp
+    src/trace/cudnn_api_calls.cpp
+    src/trace/cublas_api_calls.cpp
+    src/trace/cuda_virtual_device.cpp
+    src/trace/cuda_virtual_device.cpp
+    src/trace/tcp_gpu_session.cpp
+    src/trace/trace_executor_local.cpp
+    src/trace/trace_executor_tcp_client.cpp
+    src/trace/dlsym_util.cpp
+    src/TcpClient.cpp
+    src/utils.cpp)
+add_dependencies(manager_device flatbuffer)
+target_link_libraries(manager_device
+    iberty
+    stdc++fs
+    cudnn
+    CUDA::cudart
+    CUDA::cuda_driver
+    CUDA::cublas
+    pthread)
+
 add_library(analysis SHARED
     src/analysis/libcudaanalysis.cpp
     src/trace/cubin_analysis.cpp
