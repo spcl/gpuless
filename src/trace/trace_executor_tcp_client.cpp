@@ -17,12 +17,16 @@ static sockaddr_in iptoaddr(const char *ip, const short port) {
     return addr;
 }
 
-TraceExecutorTcp::TraceExecutorTcp(const char *ip, const short port,
-                                   manager::instance_profile profile)
-    : m_gpusession(negotiateSession(ip, port, profile)),
-      m_manager_addr(iptoaddr(ip, port)) {
+TraceExecutorTcp::TraceExecutorTcp() = default;
+
+bool TraceExecutorTcp::init(const char *ip, const short port,
+                            manager::instance_profile profile) {
+  m_manager_addr = iptoaddr(ip, port);
+  m_gpusession = negotiateSession(ip, port, profile);
     getDeviceAttributes();
-};
+
+  return true;
+}
 
 TraceExecutorTcp::~TraceExecutorTcp() {
     bool success = deallocate();
@@ -33,7 +37,7 @@ TraceExecutorTcp::~TraceExecutorTcp() {
     }
 };
 
-TcpGpuSession
+std::unique_ptr<TcpGpuSession>
 TraceExecutorTcp::negotiateSession(const char *ip, const short port,
                                    gpuless::manager::instance_profile profile) {
 
@@ -46,13 +50,10 @@ TraceExecutorTcp::negotiateSession(const char *ip, const short port,
         throw "Invalid IP address";
     }
     // this->getDeviceAttributes();
-    return TcpGpuSession(addr, 0); //session_id);
+    return std::make_unique<TcpGpuSession>(addr, 0); // session_id);
 }
 
-bool TraceExecutorTcp::deallocate() {
-
-    return true;
-}
+bool TraceExecutorTcp::deallocate() { return true; }
 
 bool TraceExecutorTcp::synchronize(CudaTrace &cuda_trace) {
     auto s = std::chrono::high_resolution_clock::now();
@@ -66,11 +67,11 @@ bool TraceExecutorTcp::synchronize(CudaTrace &cuda_trace) {
     // send trace execution request
     flatbuffers::FlatBufferBuilder builder;
     CudaTraceConverter::traceToExecRequest(cuda_trace, builder);
-    m_gpusession.send(builder.GetBufferPointer(), builder.GetSize());
+    m_gpusession->send(builder.GetBufferPointer(), builder.GetSize());
     SPDLOG_INFO("Trace execution request sent");
 
     // receive trace execution response
-    std::vector<uint8_t> response_buffer = m_gpusession.recv();
+    std::vector<uint8_t> response_buffer = m_gpusession->recv();
     SPDLOG_INFO("Trace execution response received");
     auto fb_protocol_message_response =
         GetFBProtocolMessage(response_buffer.data());
@@ -102,10 +103,10 @@ bool TraceExecutorTcp::getDeviceAttributes() {
         CreateFBProtocolMessage(builder, FBMessage_FBTraceAttributeRequest,
                                 CreateFBTraceAttributeRequest(builder).Union());
     builder.Finish(attr_request);
-    m_gpusession.send(builder.GetBufferPointer(), builder.GetSize());
+    m_gpusession->send(builder.GetBufferPointer(), builder.GetSize());
     SPDLOG_DEBUG("FBTraceAttributeRequest sent");
 
-    std::vector<uint8_t> response_buffer = m_gpusession.recv();
+    std::vector<uint8_t> response_buffer = m_gpusession->recv();
     SPDLOG_DEBUG("FBTraceAttributeResponse received");
 
     auto fb_protocol_message_response =
