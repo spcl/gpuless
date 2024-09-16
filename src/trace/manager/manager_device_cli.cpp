@@ -7,17 +7,21 @@
 extern const int BACKLOG = 5;
 
 int main(int argc, char **argv) {
-  if (argc != 4)
-    return 1;
 
   std::string device{argv[1]};
   std::string manager_type{argv[2]};
 
   if (manager_type == "tcp") {
+    if (argc != 4)
+      return 1;
+
     int port = std::atoi(argv[3]);
 
     manage_device(device, port);
   } else {
+    if (argc != 5)
+      return 1;
+
     std::string app_name{argv[3]};
     std::string poll_type{argv[4]};
 
