@@ -25,7 +25,10 @@ class TraceExecutorLocal final : public TraceExecutor {
     TraceExecutorLocal();
     ~TraceExecutorLocal();
 
-    bool synchronize(gpuless::CudaTrace &cuda_trace) override;
+    bool init(const char *ip, const short port,
+              manager::instance_profile profile);
+    bool synchronize(gpuless::CudaTrace &cuda_trace);
+    bool deallocate();
 };
 
 } // namespace gpuless

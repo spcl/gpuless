@@ -7,13 +7,22 @@
 extern const int BACKLOG = 5;
 
 int main(int argc, char **argv) {
-  if (argc != 3)
+  if (argc != 4)
     return 1;
 
   std::string device{argv[1]};
-  int port = std::atoi(argv[2]);
+  std::string manager_type{argv[2]};
 
-  manage_device(device, port);
+  if (manager_type == "tcp") {
+    int port = std::atoi(argv[3]);
+
+    manage_device(device, port);
+  } else {
+    std::string app_name{argv[3]};
+    std::string poll_type{argv[4]};
+
+    manage_device_shmem(device, app_name, poll_type);
+  }
 
   return 0;
 }

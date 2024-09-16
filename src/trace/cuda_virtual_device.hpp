@@ -14,6 +14,7 @@
 
 class CudaVirtualDevice {
   private:
+    bool initialized = false;
     void *scratch_memory = nullptr;
     size_t scratch_size = 0;
     bool scratch_used = false;
@@ -55,7 +56,7 @@ class CudaVirtualDevice {
     CUdevice device;
     CUcontext context;
 
-    CudaVirtualDevice();
+    void initRealDevice();
 
     void *get_scratch(size_t size);
     void free_scratch();

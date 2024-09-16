@@ -16,6 +16,7 @@
 #include "libgpuless.hpp"
 #include "trace_executor_local.hpp"
 #include "trace_executor_tcp_client.hpp"
+#include "trace_executor_shmem_client.hpp"
 
 using namespace gpuless;
 
@@ -26,7 +27,11 @@ short manager_port = 8002;
 const char *manager_ip = "127.0.0.1";
 
 static bool useTcp = true;
+static bool useShmem = true;
 static void exitHandler();
+
+// FIXME: singleton
+static MemPool* pool = nullptr;
 
 static void hijackInit() {
     static bool hijack_initialized = false;
@@ -80,9 +85,15 @@ static std::map<uint64_t,
                 std::chrono::time_point<std::chrono::high_resolution_clock>>
     event_times;
 
-std::shared_ptr<TraceExecutor> getTraceExecutor() {
+std::shared_ptr<TraceExecutor> getTraceExecutor(bool clean) {
     static std::shared_ptr<TraceExecutor> trace_executor;
     static bool te_initialized = false;
+
+    if(clean) {
+      trace_executor.reset();
+      return nullptr;
+    }
+
     if (!te_initialized) {
 
         // register the exit handler here, so that the static trace_executor
@@ -96,20 +107,36 @@ std::shared_ptr<TraceExecutor> getTraceExecutor() {
             std::string executor_type_str(executor_type);
             if (executor_type_str == "tcp") {
                 useTcp = true;
+                useShmem = false;
+            } else if (executor_type_str == "shmem") {
+                useShmem = true;
+                useTcp = false;
             } else {
+                useShmem = false;
                 useTcp = false;
             }
         }
 
         if (useTcp) {
-            try {
-                trace_executor = std::make_shared<TraceExecutorTcp>(
-                    manager_ip, manager_port,
+
+            trace_executor = std::make_shared<TraceExecutorTcp>();
+            bool r = trace_executor->init(manager_ip, manager_port,
                     manager::instance_profile::NO_MIG);
-            } catch (...) {
+            if (!r) {
                 SPDLOG_ERROR("Failed to initialize TCP trace executor");
                 std::exit(EXIT_FAILURE);
             }
+
+        } else if (useShmem){
+
+            //TraceExecutorShmem::init_runtime();
+            auto exec = std::make_shared<TraceExecutorShmem>();
+            pool = &exec->_pool;
+            trace_executor = exec;
+            bool r = trace_executor->init(manager_ip, manager_port,
+                                          manager::instance_profile::NO_MIG);
+
+
         } else {
             trace_executor = std::make_shared<TraceExecutorLocal>();
         }
@@ -153,6 +180,17 @@ static void exitHandler() {
     std::cout << "synchronize_time="
               << getTraceExecutor()->getSynchronizeTotalTime() << "s"
               << std::endl;
+
+    // deallocate session
+    if (useTcp || useShmem) {
+        auto success = getTraceExecutor()->deallocate();
+        if (!success) {
+            SPDLOG_ERROR("Failed to deallocate session");
+        } else {
+            SPDLOG_INFO("Deallocated session");
+        }
+    }
+    getTraceExecutor(true);
 }
 
 extern "C" {
@@ -248,19 +286,50 @@ cudaError_t cudaMemcpy(void *dst, const void *src, size_t count,
     if (kind == cudaMemcpyHostToDevice) {
         SPDLOG_INFO("{}() [cudaMemcpyHostToDevice, {} <- {}, pid={}]", __func__,
                     dst, src, getpid());
-        auto rec = std::make_shared<CudaMemcpyH2D>(dst, src, count);
-        std::memcpy(rec->buffer.data(), src, count);
-        getCudaTrace().record(rec);
+
+
+        if(pool) {
+
+          auto chunk = pool->get();
+          auto rec = std::make_shared<CudaMemcpyH2D>(dst, src, count, chunk.name);
+          std::memcpy(chunk.ptr, src, count);
+
+          getCudaTrace().record(rec);
+        } else {
+          auto rec = std::make_shared<CudaMemcpyH2D>(dst, src, count);
+
+          // Host side - we copy the data for sending
+          std::memcpy(rec->buffer.data(), src, count);
+          getCudaTrace().record(rec);
+        }
+  
     } else if (kind == cudaMemcpyDeviceToHost) {
         SPDLOG_INFO("{}() [cudaMemcpyDeviceToHost, {} <- {}, pid={}]", __func__,
                     dst, src, getpid());
-        auto rec = std::make_shared<CudaMemcpyD2H>(dst, src, count);
-        getCudaTrace().record(rec);
-        getTraceExecutor()->synchronize(getCudaTrace());
 
-        std::shared_ptr<CudaMemcpyD2H> top =
+
+        if(pool) {
+          auto chunk = pool->get();
+          auto rec = std::make_shared<CudaMemcpyD2H>(dst, src, count, chunk.name);
+          getCudaTrace().record(rec);
+          getTraceExecutor()->synchronize(getCudaTrace());
+
+          // Host side - we copy the received data
+          std::memcpy(dst, chunk.ptr, count);
+
+          pool->give(chunk.name);
+
+        } else {
+
+          auto rec = std::make_shared<CudaMemcpyD2H>(dst, src, count);
+
+          getCudaTrace().record(rec);
+          getTraceExecutor()->synchronize(getCudaTrace());
+
+          std::shared_ptr<CudaMemcpyD2H> top =
             (const std::shared_ptr<CudaMemcpyD2H> &)getCudaTrace().historyTop();
-        std::memcpy(dst, top->buffer.data(), count);
+          std::memcpy(dst, top->buffer_ptr, count);
+        }
 
         //        auto *dstb = reinterpret_cast<uint8_t *>(dst);
         //        SPDLOG_DEBUG("cudaMemcpyD2H memory probe: {:x} {:x} {:x}

@@ -7,7 +7,12 @@
 #include "dlsym_util.hpp"
 #include "libgpuless.hpp"
 
+#include "shmem/mempool.hpp"
+
 namespace gpuless {
+
+// FIXME: singleton
+MemPoolRead readers;
 
 std::string CudaRuntimeApiCall::nativeErrorToString(uint64_t err) {
     auto str = "[cudart] " +
@@ -45,21 +50,38 @@ CudaMalloc::CudaMalloc(const FBCudaApiCall *fb_cuda_api_call) {
  * cudaMemcpyH2D
  */
 CudaMemcpyH2D::CudaMemcpyH2D(void *dst, const void *src, size_t size)
-    : dst(dst), src(src), size(size), buffer(size) {}
+    : dst(dst), src(src), size(size), buffer(size), shared_name("") {}
+
+CudaMemcpyH2D::CudaMemcpyH2D(void *dst, const void *src, size_t size, std::string shared_name)
+    : dst(dst), src(src), size(size), shared_name(shared_name) {}
 
 uint64_t CudaMemcpyH2D::executeNative(CudaVirtualDevice &vdev) {
     static auto real =
         (decltype(&cudaMemcpy))real_dlsym(RTLD_NEXT, "cudaMemcpy");
-    return real(this->dst, this->buffer.data(), this->size,
-                cudaMemcpyHostToDevice);
+
+    auto val = real(this->dst, this->buffer_ptr, this->size, cudaMemcpyHostToDevice);
+    return val;
 }
 
 flatbuffers::Offset<FBCudaApiCall>
 CudaMemcpyH2D::fbSerialize(flatbuffers::FlatBufferBuilder &builder) {
-    auto api_call =
+
+    flatbuffers::Offset<FBCudaMemcpyH2D> api_call;
+    if(!this->shared_name.empty()) {
+      api_call =
+            CreateFBCudaMemcpyH2D(builder, reinterpret_cast<uint64_t>(this->dst),
+                                reinterpret_cast<uint64_t>(this->src), this->size,
+                                //builder.CreateVector(this->buffer));
+                                builder.CreateString(this->shared_name),
+                                builder.CreateVector(static_cast<uint8_t*>(nullptr), 0));
+    } else {
+        api_call =
         CreateFBCudaMemcpyH2D(builder, reinterpret_cast<uint64_t>(this->dst),
                               reinterpret_cast<uint64_t>(this->src), this->size,
+                              builder.CreateString(this->shared_name),
                               builder.CreateVector(this->buffer));
+    }
+
     auto api_call_union = CreateFBCudaApiCall(
         builder, FBCudaApiCallUnion_FBCudaMemcpyH2D, api_call.Union());
     return api_call_union;
@@ -70,29 +92,61 @@ CudaMemcpyH2D::CudaMemcpyH2D(const FBCudaApiCall *fb_cuda_api_call) {
     this->dst = reinterpret_cast<void *>(c->dst());
     this->src = reinterpret_cast<void *>(c->src());
     this->size = c->size();
-    this->buffer = std::vector<uint8_t>(c->size());
-    std::memcpy(this->buffer.data(), c->buffer()->data(), c->buffer()->size());
+    this->shared_name = *c->mmap()->c_str();
+
+    if(c->mmap()->size() == 0) {
+      this->buffer_ptr = const_cast<unsigned char*>(c->buffer()->data());
+    } else {
+      auto ptr = readers.get(c->mmap()->c_str());
+      this->buffer_ptr = reinterpret_cast<unsigned char*>(ptr);
+    }
+
 }
 
 /*
  * cudaMemcpyD2H
  */
 CudaMemcpyD2H::CudaMemcpyD2H(void *dst, const void *src, size_t size)
-    : dst(dst), src(src), size(size), buffer(size) {}
+    : dst(dst), src(src), size(size), buffer(size), buffer_ptr(nullptr) {}
+
+CudaMemcpyD2H::CudaMemcpyD2H(void *dst, const void *src, size_t size, std::string shared_name)
+    : dst(dst), src(src), size(size), buffer_ptr(nullptr), shared_name(shared_name) {}
 
 uint64_t CudaMemcpyD2H::executeNative(CudaVirtualDevice &vdev) {
     static auto real =
         (decltype(&cudaMemcpy))real_dlsym(RTLD_NEXT, "cudaMemcpy");
-    return real(this->buffer.data(), this->src, this->size,
+    return real(this->buffer_ptr, this->src, this->size,
                 cudaMemcpyDeviceToHost);
 }
 
 flatbuffers::Offset<FBCudaApiCall>
 CudaMemcpyD2H::fbSerialize(flatbuffers::FlatBufferBuilder &builder) {
-    auto api_call =
-        CreateFBCudaMemcpyD2H(builder, reinterpret_cast<uint64_t>(this->dst),
-                              reinterpret_cast<uint64_t>(this->src), this->size,
-                              builder.CreateVector(this->buffer));
+
+    flatbuffers::Offset<FBCudaMemcpyD2H> api_call;
+
+    if(! this->shared_name.empty()) {
+      // We send a name of a shared memory page
+      api_call =
+            CreateFBCudaMemcpyD2H(builder, reinterpret_cast<uint64_t>(this->dst),
+                                reinterpret_cast<uint64_t>(this->src), this->size,
+                                //builder.CreateVector(this->buffer));
+                                builder.CreateString(this->shared_name),
+                                builder.CreateVector(static_cast<uint8_t*>(nullptr), 0));
+    } else if(buffer_ptr) {
+      // We can copy the data from an existing ptr
+      api_call =
+            CreateFBCudaMemcpyD2H(builder, reinterpret_cast<uint64_t>(this->dst),
+                                reinterpret_cast<uint64_t>(this->src), this->size,
+                                builder.CreateString(this->shared_name),
+                                builder.CreateVector(this->buffer_ptr, this->size));
+    } else {
+      // We let FB copy the data directly
+      api_call =
+          CreateFBCudaMemcpyD2H(builder, reinterpret_cast<uint64_t>(this->dst),
+                                reinterpret_cast<uint64_t>(this->src), this->size,
+                                builder.CreateString(this->shared_name),
+                                builder.CreateVector(this->buffer));
+    }
     auto api_call_union = CreateFBCudaApiCall(
         builder, FBCudaApiCallUnion_FBCudaMemcpyD2H, api_call.Union());
     return api_call_union;
@@ -103,8 +157,15 @@ CudaMemcpyD2H::CudaMemcpyD2H(const FBCudaApiCall *fb_cuda_api_call) {
     this->dst = reinterpret_cast<void *>(c->dst());
     this->src = reinterpret_cast<void *>(c->src());
     this->size = c->size();
-    this->buffer = std::vector<uint8_t>(c->size());
-    std::memcpy(this->buffer.data(), c->buffer()->data(), c->buffer()->size());
+    this->shared_name = *c->mmap()->c_str();
+
+    if(c->mmap()->size() == 0) {
+      this->buffer_ptr = const_cast<unsigned char*>(c->buffer()->data());
+    } else {
+
+      auto ptr = readers.get(c->mmap()->c_str());
+      this->buffer_ptr = reinterpret_cast<unsigned char*>(ptr);
+    }
 }
 
 /*

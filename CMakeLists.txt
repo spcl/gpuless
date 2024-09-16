@@ -7,6 +7,7 @@ find_package(CUDAToolkit 11.4)
 set(CUDNN_DIR "" CACHE STRING "")
 
 option(BUILD_BENCHMARKS "Build the resnet50 benchmark" OFF)
+option(BUILD_SHMEM "Build the resnet50 benchmark" ON)
 
 option(SPDLOG_LEVEL_INFO "Set the spdlog level to info" OFF)
 option(SPDLOG_LEVEL_DEBUG "Set the spdlog level to debug" OFF)
@@ -28,6 +29,11 @@ elseif(SPDLOG_LEVEL_TRACE)
 else()
     add_compile_definitions(SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_OFF)
     message("Set SPDLOG_LEVEL_OFF")
+endif()
+
+if(BUILD_SHMEM)
+  find_package(iceoryx_posh CONFIG REQUIRED)
+  find_package(iceoryx_hoofs CONFIG REQUIRED)
 endif()
 
 include_directories(${CMAKE_SOURCE_DIR}/include)
@@ -75,6 +81,7 @@ add_executable(manager_trace
     src/trace/tcp_gpu_session.cpp
     src/trace/trace_executor_local.cpp
     src/trace/trace_executor_tcp_client.cpp
+    src/trace/trace_executor_shmem_client.cpp
     src/trace/dlsym_util.cpp
     src/TcpClient.cpp
     src/utils.cpp)
@@ -87,6 +94,10 @@ target_link_libraries(manager_trace
     CUDA::cuda_driver
     CUDA::cublas
     pthread)
+
+if(BUILD_SHMEM)
+  target_link_libraries(manager_trace iceoryx_posh::iceoryx_posh iceoryx_hoofs::iceoryx_hoofs)
+endif()
 
 add_executable(manager_device
     src/trace/manager/manager_device_cli.cpp
@@ -101,6 +112,7 @@ add_executable(manager_device
     src/trace/tcp_gpu_session.cpp
     src/trace/trace_executor_local.cpp
     src/trace/trace_executor_tcp_client.cpp
+    src/trace/trace_executor_shmem_client.cpp
     src/trace/dlsym_util.cpp
     src/TcpClient.cpp
     src/utils.cpp)
@@ -113,6 +125,10 @@ target_link_libraries(manager_device
     CUDA::cuda_driver
     CUDA::cublas
     pthread)
+
+if(BUILD_SHMEM)
+  target_link_libraries(manager_device iceoryx_posh::iceoryx_posh iceoryx_hoofs::iceoryx_hoofs)
+endif()
 
 add_library(analysis SHARED
     src/analysis/libcudaanalysis.cpp
@@ -155,6 +171,10 @@ target_link_libraries(gpuless
     CUDA::cuda_driver
     CUDA::cudart
     CUDA::cublas)
+
+if(BUILD_SHMEM)
+  target_link_libraries(gpuless iceoryx_posh::iceoryx_posh iceoryx_hoofs::iceoryx_hoofs)
+endif()
 
 add_custom_command(
     TARGET gpuless POST_BUILD

@@ -10,6 +10,11 @@ TraceExecutorLocal::TraceExecutorLocal() {}
 
 TraceExecutorLocal::~TraceExecutorLocal() = default;
 
+bool TraceExecutorLocal::init(const char *ip, const short port,
+                              manager::instance_profile profile) {
+    return true;
+}
+
 bool TraceExecutorLocal::synchronize(gpuless::CudaTrace &cuda_trace) {
     this->synchronize_counter_++;
     SPDLOG_INFO(
@@ -17,6 +22,7 @@ bool TraceExecutorLocal::synchronize(gpuless::CudaTrace &cuda_trace) {
         this->synchronize_counter_, cuda_trace.callStack().size());
 
     auto &vdev = this->cuda_virtual_device_;
+    this->cuda_virtual_device_.initRealDevice();
 
     std::set<uint64_t> required_modules;
     std::set<std::string> required_functions;
@@ -96,5 +102,7 @@ bool TraceExecutorLocal::synchronize(gpuless::CudaTrace &cuda_trace) {
     cuda_trace.markSynchronized();
     return true;
 }
+
+bool TraceExecutorLocal::deallocate() { return false; }
 
 } // namespace gpuless
