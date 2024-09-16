@@ -160,6 +160,7 @@ add_library(gpuless SHARED
     src/trace/tcp_gpu_session.cpp
     src/trace/trace_executor_local.cpp
     src/trace/trace_executor_tcp_client.cpp
+    src/trace/trace_executor_shmem_client.cpp
     src/trace/dlsym_util.cpp
     src/TcpClient.cpp
     src/utils.cpp
