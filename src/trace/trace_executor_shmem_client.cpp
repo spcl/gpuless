@@ -30,12 +30,17 @@ iox::runtime::PoshRuntime& runtime_factory(iox::cxx::optional<const iox::Runtime
 
 TraceExecutorShmem::TraceExecutorShmem()
 {
-    //iox::runtime::PoshRuntime::setRuntimeFactory(runtime_factory);
-    //runtime_factory_impl(nullptr, this);
+    const char* app_name = std::getenv("SHMEM_APP_NAME");
 
-    //// FIXME: Parameter
-    //constexpr char APP_NAME[] = "gpuless-app2";
-    //iox::runtime::PoshRuntime::initRuntime(APP_NAME);
+    if(app_name) {
+
+      iox::runtime::PoshRuntime::setRuntimeFactory(runtime_factory);
+      runtime_factory_impl(nullptr, this);
+
+      iox::runtime::PoshRuntime::initRuntime(
+      iox::RuntimeName_t{iox::cxx::TruncateToCapacity_t{}, app_name}
+      );
+    }
 
     // FIXME: Parameter
     client.reset(new iox::popo::UntypedClient({"Example", "Request-Response", "Add"}));
