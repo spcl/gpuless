@@ -92,12 +92,12 @@ CudaMemcpyH2D::CudaMemcpyH2D(const FBCudaApiCall *fb_cuda_api_call) {
     this->dst = reinterpret_cast<void *>(c->dst());
     this->src = reinterpret_cast<void *>(c->src());
     this->size = c->size();
-    this->shared_name = *c->mmap()->c_str();
+    this->shared_name = c->mmap()->str();
 
     if(c->mmap()->size() == 0) {
       this->buffer_ptr = const_cast<unsigned char*>(c->buffer()->data());
     } else {
-      auto ptr = readers.get(c->mmap()->c_str());
+      auto ptr = readers.get(this->shared_name);
       this->buffer_ptr = reinterpret_cast<unsigned char*>(ptr);
     }
 
@@ -107,7 +107,7 @@ CudaMemcpyH2D::CudaMemcpyH2D(const FBCudaApiCall *fb_cuda_api_call) {
  * cudaMemcpyD2H
  */
 CudaMemcpyD2H::CudaMemcpyD2H(void *dst, const void *src, size_t size)
-    : dst(dst), src(src), size(size), buffer(size), buffer_ptr(nullptr) {}
+    : dst(dst), src(src), size(size), buffer(size), buffer_ptr(nullptr), shared_name("") {}
 
 CudaMemcpyD2H::CudaMemcpyD2H(void *dst, const void *src, size_t size, std::string shared_name)
     : dst(dst), src(src), size(size), buffer_ptr(nullptr), shared_name(shared_name) {}
@@ -157,13 +157,13 @@ CudaMemcpyD2H::CudaMemcpyD2H(const FBCudaApiCall *fb_cuda_api_call) {
     this->dst = reinterpret_cast<void *>(c->dst());
     this->src = reinterpret_cast<void *>(c->src());
     this->size = c->size();
-    this->shared_name = *c->mmap()->c_str();
+    this->shared_name = c->mmap()->str();
 
-    if(c->mmap()->size() == 0) {
+    if(this->shared_name.empty()) {
       this->buffer_ptr = const_cast<unsigned char*>(c->buffer()->data());
     } else {
 
-      auto ptr = readers.get(c->mmap()->c_str());
+      auto ptr = readers.get(this->shared_name);
       this->buffer_ptr = reinterpret_cast<unsigned char*>(ptr);
     }
 }
