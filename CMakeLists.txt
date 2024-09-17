@@ -66,7 +66,8 @@ set(CMAKE_CUDA_RUNTIME_LIBRARY Shared)
 add_custom_target(
     flatbuffer
     COMMAND make
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/src/schemas)
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/src/schemas
+)
 
 add_executable(manager_trace
     src/trace/manager/manager.cpp
@@ -85,15 +86,23 @@ add_executable(manager_trace
     src/trace/dlsym_util.cpp
     src/TcpClient.cpp
     src/utils.cpp)
+target_include_directories(
+    manager_trace SYSTEM PRIVATE $<TARGET_PROPERTY:spdlog::spdlog,INTERFACE_INCLUDE_DIRECTORIES>
+)
+add_dependencies(manager_trace spdlog)
 add_dependencies(manager_trace flatbuffer)
 target_link_libraries(manager_trace
     iberty
     stdc++fs
     cudnn
+    spdlog::spdlog
     CUDA::cudart
     CUDA::cuda_driver
     CUDA::cublas
-    pthread)
+    pthread
+    flatbuffers
+    iceoryx_posh::iceoryx_posh
+)
 
 if(BUILD_SHMEM)
   target_link_libraries(manager_trace iceoryx_posh::iceoryx_posh iceoryx_hoofs::iceoryx_hoofs)
@@ -116,15 +125,23 @@ add_executable(manager_device
     src/trace/dlsym_util.cpp
     src/TcpClient.cpp
     src/utils.cpp)
+target_include_directories(
+    manager_device SYSTEM PRIVATE $<TARGET_PROPERTY:spdlog::spdlog,INTERFACE_INCLUDE_DIRECTORIES>
+)
+add_dependencies(manager_device spdlog)
 add_dependencies(manager_device flatbuffer)
 target_link_libraries(manager_device
     iberty
     stdc++fs
     cudnn
+    spdlog::spdlog
     CUDA::cudart
     CUDA::cuda_driver
     CUDA::cublas
-    pthread)
+    pthread
+    flatbuffers
+    iceoryx_posh::iceoryx_posh
+)
 
 if(BUILD_SHMEM)
   target_link_libraries(manager_device iceoryx_posh::iceoryx_posh iceoryx_hoofs::iceoryx_hoofs)
@@ -134,17 +151,23 @@ add_library(analysis SHARED
     src/analysis/libcudaanalysis.cpp
     src/trace/cubin_analysis.cpp
     src/utils.cpp src/trace/trace_executor.hpp)
+add_dependencies(analysis spdlog)
 target_link_libraries(analysis
     CUDA::cudart
-    CUDA::cuda_driver)
+    CUDA::cuda_driver
+    spdlog::spdlog
+)
 
 add_library(argument_analysis SHARED
         src/argument_analysis/libarganalysis.cpp
         src/trace/cubin_analysis.cpp
         src/utils.cpp src/trace/trace_executor.hpp)
+add_dependencies(argument_analysis spdlog)
 target_link_libraries(argument_analysis
         CUDA::cudart
-        CUDA::cuda_driver)
+        CUDA::cuda_driver
+    	spdlog::spdlog
+)
 
 add_library(gpuless SHARED
     src/trace/libgpuless.cpp
@@ -165,13 +188,20 @@ add_library(gpuless SHARED
     src/TcpClient.cpp
     src/utils.cpp
     src/trace/cubin_analysis.cpp)
+target_include_directories(gpuless SYSTEM PRIVATE $<TARGET_PROPERTY:spdlog::spdlog,INTERFACE_INCLUDE_DIRECTORIES>)
+add_dependencies(gpuless flatbuffer)
+add_dependencies(gpuless spdlog)
 target_link_libraries(gpuless
     iberty
     stdc++fs
     cudnn
+    spdlog::spdlog
     CUDA::cuda_driver
     CUDA::cudart
-    CUDA::cublas)
+    CUDA::cublas
+    flatbuffers
+    iceoryx_posh::iceoryx_posh
+)
 
 if(BUILD_SHMEM)
   target_link_libraries(gpuless iceoryx_posh::iceoryx_posh iceoryx_hoofs::iceoryx_hoofs)
