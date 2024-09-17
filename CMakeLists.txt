@@ -36,8 +36,8 @@ if(BUILD_SHMEM)
   find_package(iceoryx_hoofs CONFIG REQUIRED)
 endif()
 
-include_directories(${CMAKE_SOURCE_DIR}/include)
-link_directories(${CMAKE_SOURCE_DIR}/lib)
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
+link_directories(${CMAKE_CURRENT_SOURCE_DIR}/lib)
 
 # special options for compiling on the CSCS cluster
 cmake_host_system_information(RESULT _hostname QUERY HOSTNAME)
