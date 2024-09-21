@@ -46,7 +46,7 @@ TraceExecutorShmem::TraceExecutorShmem()
     client.reset(new iox::popo::UntypedClient({"Example", "Request-Response", "Add"}));
 
     waitset.emplace();
-    wait_poll = std::string_view{std::getenv("POLL_TYPE")} == "WAIT";
+    wait_poll = std::string_view{std::getenv("POLL_TYPE")} == "wait";
 
     if(wait_poll) {
       waitset.value().attachState(*client, iox::popo::ClientState::HAS_RESPONSE).or_else([](auto) {
