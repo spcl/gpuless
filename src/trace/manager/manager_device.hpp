@@ -5,11 +5,28 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <optional>
 
 #include <iceoryx_posh/popo/untyped_server.hpp>
+#include <iceoryx_posh/popo/wait_set.hpp>
+#include <iceoryx_hoofs/posix_wrapper/signal_watcher.hpp>
 
 void manage_device(const std::string& device, uint16_t port);
 void manage_device_shmem(const std::string& device, const std::string& app_name, const std::string& poll_type);
+
+struct SigHandler
+{
+  static iox::popo::WaitSet<>* waitset_ptr;
+  static bool quit;
+
+  static void sigHandler(int sig [[maybe_unused]])
+  {
+    quit = true;
+    if(SigHandler::waitset_ptr) {
+      SigHandler::waitset_ptr->markForDestruction();
+    }
+  }
+};
 
 struct ShmemServer {
 
@@ -25,6 +42,9 @@ struct ShmemServer {
 
   void _process_client(const void* payload);
   double _sum = 0;
+
+  std::optional<iox::posix::SignalGuard> sigint;
+  std::optional<iox::posix::SignalGuard> sigterm;
 };
 
 #endif // __MANAGER_DEVICE_HPP__

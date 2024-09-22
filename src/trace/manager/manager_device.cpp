@@ -10,7 +10,6 @@
 #include <spdlog/spdlog.h>
 
 #include <iceoryx_hoofs/cxx/string.hpp>
-#include <iceoryx_hoofs/posix_wrapper/signal_watcher.hpp>
 #include <iceoryx_posh/popo/untyped_server.hpp>
 #include <iceoryx_posh/popo/wait_set.hpp>
 #include <iceoryx_posh/runtime/posh_runtime.hpp>
@@ -226,11 +225,18 @@ void ShmemServer::_process_client(const void *requestPayload) {
   server->releaseRequest(requestPayload);
 }
 
+iox::popo::WaitSet<>* SigHandler::waitset_ptr;
+bool SigHandler::quit = false;
+
 void ShmemServer::loop_wait() {
   server.reset(
       new iox::popo::UntypedServer({"Example", "Request-Response", "Add"}));
 
   iox::popo::WaitSet<> waitset;
+
+  SigHandler::waitset_ptr = &waitset;
+  sigint.emplace(iox::posix::registerSignalHandler(iox::posix::Signal::INT, SigHandler::sigHandler));
+  sigterm.emplace(iox::posix::registerSignalHandler(iox::posix::Signal::TERM, SigHandler::sigHandler));
 
   waitset.attachState(*server, iox::popo::ServerState::HAS_REQUEST)
       .or_else([](auto) {
@@ -240,7 +246,7 @@ void ShmemServer::loop_wait() {
 
   // TODO: subscriber for master
 
-  while (!iox::posix::hasTerminationRequested()) {
+  while (!SigHandler::quit) {
     auto notificationVector = waitset.wait();
 
     for (auto &notification : notificationVector) {
@@ -320,12 +326,12 @@ void manage_device_shmem(const std::string &device, const std::string &app_name,
 
   ShmemServer shm_server;
 
-  shm_server.setup("gpuless-app");
+  shm_server.setup(app_name);
 
   // initialize cuda device pre-emptively
   getCudaVirtualDevice().initRealDevice();
 
-  if (std::string_view{poll_type} == "WAIT") {
+  if (std::string_view{poll_type} == "wait") {
     shm_server.loop_wait();
   } else {
     shm_server.loop();
