@@ -45,13 +45,14 @@ struct MemChunk {
     {
         std::cerr << "Close " << name << std::endl;
         munmap(ptr, CHUNK_SIZE);
-        shm_unlink(name.c_str());
+        //shm_unlink(name.c_str());
     }
 };
 
 class MemPoolRead {
     //std::queue<MemChunk> used_chunks;
     std::unordered_map<std::string, void*> used_chunks;
+    std::vector<std::string> names;
 public:
 
     void* get(const std::string& name)
@@ -63,11 +64,25 @@ public:
         auto ptr = mmap(NULL, MemChunk::CHUNK_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
         std::cerr << "open " << name << " " << fd << " " << ptr << std::endl;
         used_chunks[name] = ptr;
+        names.emplace_back(name);
         return ptr;
       } else {
         //std::cerr << "return " << name << " " << (*it).second << std::endl;
         return (*it).second;
       }
+    }
+
+    void close()
+    {
+      for(auto & name: names) {
+        shm_unlink(name.c_str());
+      }
+    }
+
+    static MemPoolRead& get_instance()
+    {
+      static MemPoolRead readers;
+      return readers;
     }
 };
 

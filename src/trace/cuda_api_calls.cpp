@@ -11,9 +11,6 @@
 
 namespace gpuless {
 
-// FIXME: singleton
-MemPoolRead readers;
-
 std::string CudaRuntimeApiCall::nativeErrorToString(uint64_t err) {
     auto str = "[cudart] " +
                std::string(cudaGetErrorString(static_cast<cudaError_t>(err)));
@@ -97,7 +94,7 @@ CudaMemcpyH2D::CudaMemcpyH2D(const FBCudaApiCall *fb_cuda_api_call) {
     if(c->mmap()->size() == 0) {
       this->buffer_ptr = const_cast<unsigned char*>(c->buffer()->data());
     } else {
-      auto ptr = readers.get(this->shared_name);
+      auto ptr = MemPoolRead::get_instance().get(this->shared_name);
       this->buffer_ptr = reinterpret_cast<unsigned char*>(ptr);
     }
 
@@ -124,7 +121,7 @@ CudaMemcpyD2H::fbSerialize(flatbuffers::FlatBufferBuilder &builder) {
 
     flatbuffers::Offset<FBCudaMemcpyD2H> api_call;
 
-    if(! this->shared_name.empty()) {
+    if(!this->shared_name.empty()) {
       // We send a name of a shared memory page
       api_call =
             CreateFBCudaMemcpyD2H(builder, reinterpret_cast<uint64_t>(this->dst),
@@ -163,7 +160,7 @@ CudaMemcpyD2H::CudaMemcpyD2H(const FBCudaApiCall *fb_cuda_api_call) {
       this->buffer_ptr = const_cast<unsigned char*>(c->buffer()->data());
     } else {
 
-      auto ptr = readers.get(this->shared_name);
+      auto ptr = MemPoolRead::get_instance().get(this->shared_name);
       this->buffer_ptr = reinterpret_cast<unsigned char*>(ptr);
     }
 }

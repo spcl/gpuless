@@ -19,6 +19,7 @@
 #include "../cuda_trace.hpp"
 #include "../cuda_trace_converter.hpp"
 #include "manager_device.hpp"
+#include "../shmem/mempool.hpp"
 
 extern const int BACKLOG;
 
@@ -336,5 +337,8 @@ void manage_device_shmem(const std::string &device, const std::string &app_name,
   } else {
     shm_server.loop();
   }
-    exit(EXIT_SUCCESS);
+
+  gpuless::MemPoolRead::get_instance().close();
+
+  return;
 }
