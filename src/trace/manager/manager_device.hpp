@@ -28,6 +28,104 @@ struct SigHandler
   }
 };
 
+enum class GPUlessMessage {
+
+  LOCK_DEVICE = 0,
+  BASIC_EXEC = 1,
+  MEMCPY_ONLY = 2,
+  FULL_EXEC = 3,
+  SWAP_OFF = 4,
+  SWAP_IN = 5,
+
+  REGISTER = 10,
+  SWAP_OFF_CONFIRM = 11
+};
+
+
+enum class Status
+{
+  NO_EXEC,
+  BASIC_OPS,
+  MEMCPY,
+  EXEC
+};
+
+struct ExecutionStatus
+{
+
+  bool can_exec()
+  {
+    return _status != Status::NO_EXEC;
+  }
+
+  bool can_memcpy()
+  {
+    return _status == Status::MEMCPY || _status == Status::EXEC;
+  }
+
+  bool can_exec_kernels()
+  {
+    return _status == Status::EXEC;
+  }
+
+  void lock()
+  {
+    _status = Status::NO_EXEC;
+  }
+
+  void basic_exec()
+  {
+    _status = Status::BASIC_OPS;
+  }
+
+  void memcpy()
+  {
+    _status = Status::MEMCPY;
+  }
+
+  void exec()
+  {
+    _status = Status::EXEC;
+  }
+
+  void save(int pos)
+  {
+    _pos = pos;
+  }
+
+  void save_payload(const void* ptr)
+  {
+    _payload_ptr = ptr;
+  }
+
+  const void* load_payload()
+  {
+    return _payload_ptr;
+  }
+
+  bool has_unfinished_trace()
+  {
+    return _pos != -1;
+  }
+
+  int load()
+  {
+    return _pos;
+  }
+
+  static ExecutionStatus& instance()
+  {
+    static ExecutionStatus status;
+    return status;
+  }
+
+private:
+  Status _status = Status::NO_EXEC;
+
+  int _pos = -1;
+  const void* _payload_ptr = nullptr;
+};
+
 struct ShmemServer {
 
   std::unique_ptr<iox::popo::UntypedServer> server;
@@ -41,6 +139,7 @@ struct ShmemServer {
   void release(void*);
 
   void _process_client(const void* payload);
+  void _process_remainder();
   double _sum = 0;
 
   std::optional<iox::posix::SignalGuard> sigint;
