@@ -18,6 +18,9 @@
 #include "../../utils.hpp"
 #include "../cuda_trace.hpp"
 #include "../cuda_trace_converter.hpp"
+#include "iceoryx_posh/internal/popo/base_subscriber.hpp"
+#include "iceoryx_posh/popo/publisher.hpp"
+#include "iceoryx_posh/popo/subscriber.hpp"
 #include "manager_device.hpp"
 #include "../shmem/mempool.hpp"
 
@@ -229,9 +232,42 @@ void ShmemServer::_process_client(const void *requestPayload) {
 iox::popo::WaitSet<>* SigHandler::waitset_ptr;
 bool SigHandler::quit = false;
 
-void ShmemServer::loop_wait() {
-  server.reset(
-      new iox::popo::UntypedServer({"Example", "Request-Response", "Add"}));
+enum class GPUlessMessage {
+
+  NO_EXEC = 0,
+  MEMCPY_ONLY = 1,
+  FULL_EXEC = 2,
+  SWAP_OFF = 3,
+  SWAP_IN = 4,
+
+  REGISTER = 10,
+  SWAP_OFF_CONFIRM = 11
+};
+
+void ShmemServer::loop_wait(const char* user_name)
+{
+
+  server.reset(new iox::popo::UntypedServer({
+    iox::RuntimeName_t{iox::cxx::TruncateToCapacity_t{}, user_name},
+    "Gpuless",
+    "Client"
+  }));
+
+  iox::popo::Publisher<int> orchestrator_send{
+    iox::capro::ServiceDescription{
+      iox::RuntimeName_t{iox::cxx::TruncateToCapacity_t{}, fmt::format("gpuless-{}", user_name)},
+      "Orchestrator",
+      "Send"
+    }
+  };
+
+  iox::popo::Subscriber<int> orchestrator_recv{
+    iox::capro::ServiceDescription{
+      iox::RuntimeName_t{iox::cxx::TruncateToCapacity_t{}, fmt::format("gpuless-{}", user_name)},
+      "Orchestrator",
+      "Recv"
+    }
+  };
 
   iox::popo::WaitSet<> waitset;
 
@@ -245,33 +281,59 @@ void ShmemServer::loop_wait() {
         std::exit(EXIT_FAILURE);
       });
 
-  // TODO: subscriber for master
+  waitset.attachEvent(orchestrator_recv, iox::popo::SubscriberEvent::DATA_RECEIVED)
+      .or_else([](auto) {
+        std::cerr << "failed to attach orchestrator subscriber" << std::endl;
+        std::exit(EXIT_FAILURE);
+      });
+
+  orchestrator_send.loan().and_then(
+    [&](auto& payload) {
+
+      *payload = static_cast<int>(GPUlessMessage::REGISTER);
+      orchestrator_send.publish(std::move(payload));
+    }
+  );
 
   while (!SigHandler::quit) {
     auto notificationVector = waitset.wait();
 
     for (auto &notification : notificationVector) {
+
       if (notification->doesOriginateFrom(server.get())) {
 
-        //! [take request]
         server->take().and_then(
-            [&](auto &requestPayload) { _process_client(requestPayload); });
+          [&](auto &requestPayload) {
+            _process_client(requestPayload);
+          }
+        );
+
+      } else {
+        spdlog::error("Message from the orchestrator! Code {}", *orchestrator_recv.take()->get());
       }
     }
   }
 }
 
-void ShmemServer::loop() {
-  server.reset(
-      new iox::popo::UntypedServer({"Example", "Request-Response", "Add"}));
+void ShmemServer::loop(const char* user_name)
+{
+
+  // FIXME: add here communication with orchestrato
+  server.reset(new iox::popo::UntypedServer({
+    iox::RuntimeName_t{iox::cxx::TruncateToCapacity_t{}, user_name},
+    "Gpuless",
+    "Client"
+  }));
 
   double sum = 0;
   while (!iox::posix::hasTerminationRequested()) {
-    //! [take request]
+
     server->take().and_then(
-        [&](auto &requestPayload) { _process_client(requestPayload); });
-    //! [take request]
-    }
+      [&](auto &requestPayload) {
+        _process_client(requestPayload);
+      }
+    );
+  }
 }
 
 void manage_device(const std::string& device, uint16_t port) {
@@ -321,7 +383,8 @@ void manage_device(const std::string& device, uint16_t port) {
 }
 
 void manage_device_shmem(const std::string &device, const std::string &app_name,
-                         const std::string &poll_type) {
+                         const std::string &poll_type, const char* user_name)
+{
 
   setenv("CUDA_VISIBLE_DEVICES", device.c_str(), 1);
 
@@ -333,9 +396,9 @@ void manage_device_shmem(const std::string &device, const std::string &app_name,
   getCudaVirtualDevice().initRealDevice();
 
   if (std::string_view{poll_type} == "wait") {
-    shm_server.loop_wait();
+    shm_server.loop_wait(user_name);
   } else {
-    shm_server.loop();
+    shm_server.loop(user_name);
   }
 
   gpuless::MemPoolRead::get_instance().close();
