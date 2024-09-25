@@ -54,6 +54,8 @@ class CudaMemcpyH2D : public CudaRuntimeApiCall {
 
     uint64_t executeNative(CudaVirtualDevice &vdev) override;
 
+    virtual bool is_memop() override { return true; }
+
     flatbuffers::Offset<FBCudaApiCall>
     fbSerialize(flatbuffers::FlatBufferBuilder &builder) override;
 };
@@ -76,6 +78,8 @@ class CudaMemcpyD2H : public CudaRuntimeApiCall {
 
     uint64_t executeNative(CudaVirtualDevice &vdev) override;
 
+    virtual bool is_memop() override { return true; }
+
     flatbuffers::Offset<FBCudaApiCall>
     fbSerialize(flatbuffers::FlatBufferBuilder &builder) override;
 };
@@ -90,6 +94,8 @@ class CudaMemcpyD2D : public CudaRuntimeApiCall {
     explicit CudaMemcpyD2D(const FBCudaApiCall *fb_cuda_api_call);
 
     uint64_t executeNative(CudaVirtualDevice &vdev) override;
+
+    virtual bool is_memop() override { return true; }
 
     flatbuffers::Offset<FBCudaApiCall>
     fbSerialize(flatbuffers::FlatBufferBuilder &builder) override;
@@ -109,6 +115,8 @@ class CudaMemcpyAsyncH2D : public CudaRuntimeApiCall {
 
     uint64_t executeNative(CudaVirtualDevice &vdev) override;
 
+    virtual bool is_memop() override { return true; }
+
     flatbuffers::Offset<FBCudaApiCall>
     fbSerialize(flatbuffers::FlatBufferBuilder &builder) override;
 };
@@ -126,6 +134,8 @@ class CudaMemcpyAsyncD2H : public CudaRuntimeApiCall {
     explicit CudaMemcpyAsyncD2H(const FBCudaApiCall *fb_cuda_api_call);
 
     uint64_t executeNative(CudaVirtualDevice &vdev) override;
+
+    virtual bool is_memop() override { return true; }
 
     flatbuffers::Offset<FBCudaApiCall>
     fbSerialize(flatbuffers::FlatBufferBuilder &builder) override;
@@ -186,6 +196,8 @@ class CudaLaunchKernel : public CudaRuntimeApiCall {
     explicit CudaLaunchKernel(const FBCudaApiCall *fb_cuda_api_call);
 
     uint64_t executeNative(CudaVirtualDevice &vdev) override;
+
+    virtual bool is_kernel() override { return true; }
 
     flatbuffers::Offset<FBCudaApiCall>
     fbSerialize(flatbuffers::FlatBufferBuilder &builder) override;

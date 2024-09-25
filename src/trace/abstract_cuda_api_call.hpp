@@ -16,6 +16,9 @@ class AbstractCudaApiCall {
     virtual std::vector<uint64_t> requiredCudaModuleIds() { return {}; };
     virtual std::vector<std::string> requiredFunctionSymbols() { return {}; };
     virtual std::string typeName() { return typeid(*this).name(); }
+
+    virtual bool is_memop() { return false; }
+    virtual bool is_kernel() { return false; }
 };
 
 } // namespace gpuless
