@@ -12,7 +12,7 @@
 #include <iceoryx_hoofs/posix_wrapper/signal_watcher.hpp>
 
 void manage_device(const std::string& device, uint16_t port);
-void manage_device_shmem(const std::string& device, const std::string& app_name, const std::string& poll_type);
+void manage_device_shmem(const std::string& device, const std::string& app_name, const std::string& poll_type, const char* user_name);
 
 struct SigHandler
 {
@@ -33,8 +33,8 @@ struct ShmemServer {
   std::unique_ptr<iox::popo::UntypedServer> server;
 
   void setup(const std::string app_name);
-  void loop();
-  void loop_wait();
+  void loop(const char*);
+  void loop_wait(const char*);
   void finish();
 
   void* take();

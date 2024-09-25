@@ -19,13 +19,14 @@ int main(int argc, char **argv) {
 
     manage_device(device, port);
   } else {
-    if (argc != 5)
+    if (argc != 6)
       return 1;
 
     std::string app_name{argv[3]};
     std::string poll_type{argv[4]};
+    const char* client_name{argv[5]};
 
-    manage_device_shmem(device, app_name, poll_type);
+    manage_device_shmem(device, app_name, poll_type, client_name);
   }
 
   return 0;

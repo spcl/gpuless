@@ -31,6 +31,7 @@ iox::runtime::PoshRuntime& runtime_factory(iox::cxx::optional<const iox::Runtime
 TraceExecutorShmem::TraceExecutorShmem()
 {
     const char* app_name = std::getenv("SHMEM_APP_NAME");
+    const char* user_name = std::getenv("CONTAINER_NAME");
 
     if(app_name) {
 
@@ -42,8 +43,11 @@ TraceExecutorShmem::TraceExecutorShmem()
       );
     }
 
-    // FIXME: Parameter
-    client.reset(new iox::popo::UntypedClient({"Example", "Request-Response", "Add"}));
+    client.reset(new iox::popo::UntypedClient({
+      iox::RuntimeName_t{iox::cxx::TruncateToCapacity_t{}, user_name},
+      "Gpuless",
+      "Client"
+    }));
 
     waitset.emplace();
     wait_poll = std::string_view{std::getenv("POLL_TYPE")} == "wait";
