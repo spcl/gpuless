@@ -10,6 +10,7 @@
 #include <iceoryx_posh/popo/untyped_server.hpp>
 #include <iceoryx_posh/popo/wait_set.hpp>
 #include <iceoryx_hoofs/posix_wrapper/signal_watcher.hpp>
+#include <spdlog/spdlog.h>
 
 void manage_device(const std::string& device, uint16_t port);
 void manage_device_shmem(const std::string& device, const std::string& app_name, const std::string& poll_type, const char* user_name);
@@ -70,21 +71,25 @@ struct ExecutionStatus
 
   void lock()
   {
+    spdlog::info("[ExecutionStatus] Locking device!");
     _status = Status::NO_EXEC;
   }
 
   void basic_exec()
   {
+    spdlog::info("[ExecutionStatus] CPU execution!");
     _status = Status::BASIC_OPS;
   }
 
   void memcpy()
   {
+    spdlog::info("[ExecutionStatus] Memory operations!");
     _status = Status::MEMCPY;
   }
 
   void exec()
   {
+    spdlog::info("[ExecutionStatus] Full execution!");
     _status = Status::EXEC;
   }
 
