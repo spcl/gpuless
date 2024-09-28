@@ -404,7 +404,7 @@ void ShmemServer::loop_wait(const char* user_name)
         std::exit(EXIT_FAILURE);
       });
 
-  waitset.attachEvent(orchestrator_recv, iox::popo::SubscriberEvent::DATA_RECEIVED)
+  waitset.attachState(orchestrator_recv, iox::popo::SubscriberState::HAS_DATA)
       .or_else([](auto) {
         std::cerr << "failed to attach orchestrator subscriber" << std::endl;
         std::exit(EXIT_FAILURE);
