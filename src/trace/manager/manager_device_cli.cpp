@@ -2,6 +2,8 @@
 #include <cstdlib>
 #include <string>
 
+#include <sys/prctl.h>
+
 #include "manager_device.hpp"
 
 extern const int BACKLOG = 5;
@@ -10,6 +12,8 @@ int main(int argc, char **argv) {
 
   std::string device{argv[1]};
   std::string manager_type{argv[2]};
+
+  prctl(PR_SET_PDEATHSIG, SIGHUP);
 
   if (manager_type == "tcp") {
     if (argc != 4)
