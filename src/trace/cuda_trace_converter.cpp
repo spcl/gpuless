@@ -9,7 +9,12 @@ namespace gpuless {
 void CudaTraceConverter::traceToExecRequest(
     CudaTrace &cuda_trace, flatbuffers::FlatBufferBuilder &builder) {
     std::vector<flatbuffers::Offset<FBCudaApiCall>> fb_call_trace;
-    for (auto &c : cuda_trace.callStack()) {
+
+    //for (auto &c : cuda_trace.callStack()) {
+    auto [begin, end] = cuda_trace.callStack();
+    for (; begin != end; begin++) {
+
+        auto& c = *begin;
         SPDLOG_DEBUG("Serializing api call: {}", c->typeName());
         fb_call_trace.push_back(c->fbSerialize(builder));
     }
@@ -19,7 +24,13 @@ void CudaTraceConverter::traceToExecRequest(
 
     std::set<uint64_t> required_modules;
     std::set<std::string> required_functions;
-    for (auto &apiCall : cuda_trace.callStack()) {
+    //for (auto &apiCall : cuda_trace.callStack()) {
+    std::tie(begin, end) = cuda_trace.callStack();
+    SPDLOG_INFO("Sending {} elements of the callstack trace", std::distance(begin, end));
+    for (; begin != end; begin++) {
+
+        auto& apiCall = *begin;
+
         auto rmod_vec = apiCall->requiredCudaModuleIds();
         required_modules.insert(rmod_vec.begin(), rmod_vec.end());
         auto rfunc_vec = apiCall->requiredFunctionSymbols();

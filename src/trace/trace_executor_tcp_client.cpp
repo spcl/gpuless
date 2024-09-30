@@ -60,9 +60,9 @@ bool TraceExecutorTcp::synchronize(CudaTrace &cuda_trace) {
 
     // collect statistics on synchronizations
     this->synchronize_counter_++;
-    SPDLOG_INFO(
-        "TraceExecutorTcp::synchronize() [synchronize_counter={}, size={}]",
-        this->synchronize_counter_, cuda_trace.callStack().size());
+    //SPDLOG_INFO(
+    //    "TraceExecutorTcp::synchronize() [synchronize_counter={}, size={}]",
+    //    this->synchronize_counter_, cuda_trace.callStack().size());
 
     // send trace execution request
     flatbuffers::FlatBufferBuilder builder;

@@ -6,6 +6,7 @@
 
 #include <iceoryx_posh/runtime/posh_runtime.hpp>
 #include <iceoryx_hoofs/cxx/expected.hpp>
+#include <stdexcept>
 
 namespace gpuless {
 
@@ -180,9 +181,9 @@ bool TraceExecutorShmem::send_only(CudaTrace &cuda_trace)
     auto s = std::chrono::high_resolution_clock::now();
 
     this->synchronize_counter_++;
-    SPDLOG_INFO(
-        "TraceExecutorTcp::synchronize() [synchronize_counter={}, size={}]",
-        this->synchronize_counter_, cuda_trace.callStack().size());
+    //SPDLOG_INFO(
+    //    "TraceExecutorTcp::synchronize() [synchronize_counter={}, size={}]",
+    //    this->synchronize_counter_, cuda_trace.callStack().size());
 
     // collect statistics on synchronizations
 
@@ -219,8 +220,77 @@ bool TraceExecutorShmem::send_only(CudaTrace &cuda_trace)
         .or_else([](auto& error) { std::cout << "Could not allocate Request! Error: " << error << std::endl; });
     SPDLOG_INFO("Trace execution request sent");
 
-    // FIXME: not ideal - this just moves the pending invocations into already synchronized ones.
-    cuda_trace.markSynchronized();
+    cuda_trace.markSent();
+    // FIXME: merge implementation with synchronization
+    // FIXME: verify this works properly in all edge cases
+
+    std::shared_ptr<AbstractCudaApiCall> cuda_api_call = nullptr;
+
+    auto process = [&](iox::cxx::expected<const void*, iox::popo::ChunkReceiveResult> val) {
+
+        auto responsePayload = val.value();
+        auto responseHeader = iox::popo::ResponseHeader::fromPayload(responsePayload);
+        SPDLOG_DEBUG("Received_reply {}", responseHeader->getSequenceId());
+        //if (responseHeader->getSequenceId() == expectedResponseSequenceId)
+        if (responseHeader->getSequenceId() == last_synchronized + 1)
+        {
+
+            SPDLOG_INFO("Trace execution response received");
+            auto fb_protocol_message_response =
+                GetFBProtocolMessage(responsePayload);
+            auto fb_trace_exec_response =
+                fb_protocol_message_response->message_as_FBTraceExecResponse();
+            cuda_api_call =
+                CudaTraceConverter::execResponseToTopApiCall(fb_trace_exec_response);
+            //auto e1 = std::chrono::high_resolution_clock::now();
+            //auto d1 =
+            //    std::chrono::duration_cast<std::chrono::microseconds>(e1 - s1).count() /
+            //    1000000.0;
+            //std::cerr << d1 << std::endl;
+            //this->synchronize_total_time_2 += d1;
+            client->releaseResponse(responsePayload);
+
+            last_synchronized++;
+        }
+        else
+        {
+            std::cout << "Got Response with outdated sequence ID! Expected = " << last_synchronized
+                      << "; Actual = " << responseHeader->getSequenceId() << "! -> skip" << std::endl;
+        }
+    };
+
+    int64_t prev_synchronization = last_synchronized;
+
+    // We don't wait, we check for new results.
+    auto val = client->take();
+    while(!val.has_error()) {
+      SPDLOG_INFO("Send-only: process notification");
+      process(val);
+      val = client->take();
+    }
+
+    std::cerr << "Previous synchronization point " << prev_synchronization << " new one " << last_synchronized << std::endl;
+    int64_t synchronized_calls = last_synchronized - prev_synchronization;
+    if(synchronized_calls > 0) {
+
+      // Here we want to access the part of call stack that was already sent.
+      auto [begin, end] = cuda_trace.fullCallStack();
+      for(int i = 0; i < synchronized_calls; ++i) {
+
+        if(auto* ptr = dynamic_cast<CudaMemcpyH2D*>((*begin).get())) {
+          _pool.give(ptr->shared_name);
+        }
+
+        ++begin;
+
+      }
+
+      cuda_trace.markSynchronized(synchronized_calls);
+      if(cuda_api_call)
+        cuda_trace.setHistoryTop(cuda_api_call);
+
+    }
+
     return true;
 }
 
@@ -230,9 +300,9 @@ bool TraceExecutorShmem::synchronize(CudaTrace &cuda_trace)
 
 
     this->synchronize_counter_++;
-    SPDLOG_INFO(
-        "TraceExecutorTcp::synchronize() [synchronize_counter={}, size={}]",
-        this->synchronize_counter_, cuda_trace.callStack().size());
+    //SPDLOG_INFO(
+    //    "TraceExecutorTcp::synchronize() [synchronize_counter={}, size={}]",
+    //    this->synchronize_counter_, cuda_trace.callStack().size());
 
     // collect statistics on synchronizations
 
@@ -255,7 +325,7 @@ bool TraceExecutorShmem::synchronize(CudaTrace &cuda_trace)
             auto requestHeader = iox::popo::RequestHeader::fromPayload(requestPayload);
             //requestHeader->setSequenceId(requestSequenceId);
             requestHeader->setSequenceId(++last_sent);
-            SPDLOG_DEBUG("Submit_request {}", requestSequenceId);
+            SPDLOG_DEBUG("Submit_request {}", last_sent - 1);
             //expectedResponseSequenceId = requestSequenceId;
             //requestSequenceId += 1;
 
@@ -359,9 +429,10 @@ bool TraceExecutorShmem::synchronize(CudaTrace &cuda_trace)
     }
 
     // return chunks
-    for(auto & call : cuda_trace.callStack()) {
+    auto [begin, end] = cuda_trace.fullCallStack();
+    for(; begin != end; ++begin) {
 
-      if(auto* ptr = dynamic_cast<CudaMemcpyH2D*>(call.get())) {
+      if(auto* ptr = dynamic_cast<CudaMemcpyH2D*>((*begin).get())) {
         _pool.give(ptr->shared_name);
       }
 

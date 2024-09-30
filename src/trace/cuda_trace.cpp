@@ -11,24 +11,55 @@ void CudaTrace::record(
     this->call_stack_.push_back(cudaApiCall);
 }
 
-void CudaTrace::markSynchronized() {
-    // move current trace to history
+void CudaTrace::markSent()
+{
+  already_sent = this->call_stack_.size();
+}
+
+void CudaTrace::markSynchronized(int64_t positions)
+{
+  // move current trace to history
+  if(positions >= 0) {
+    std::move(std::begin(this->call_stack_), std::begin(this->call_stack_) + positions,
+              std::back_inserter(this->synchronized_history_));
+  } else {
     std::move(std::begin(this->call_stack_), std::end(this->call_stack_),
               std::back_inserter(this->synchronized_history_));
+  }
 
-    SPDLOG_INFO("Cuda trace history size: {}",
-                this->synchronized_history_.size());
+  SPDLOG_INFO("Cuda trace history size: {}",
+              this->synchronized_history_.size());
 
-    // clear the current trace
+  // clear the current trace
+  if(positions >= 0) {
+    this->call_stack_.erase(this->call_stack_.begin(), this->call_stack_.begin() + positions);
+  } else {
     this->call_stack_.clear();
+  }
+
+  already_sent = 0;
 }
 
 const std::shared_ptr<AbstractCudaApiCall> &CudaTrace::historyTop() {
     return this->synchronized_history_.back();
 }
 
-std::vector<std::shared_ptr<AbstractCudaApiCall>>& CudaTrace::callStack() {
-    return this->call_stack_;
+//std::vector<std::shared_ptr<AbstractCudaApiCall>>& CudaTrace::callStack() {
+//    return this->call_stack_;
+//}
+std::tuple<CudaTrace::it_t, CudaTrace::it_t> CudaTrace::callStack()
+{
+  SPDLOG_INFO("CallStack Query: already_sent {}, callstack size {}", already_sent, this->call_stack_.size());
+  if(already_sent > 0) {
+    return std::make_tuple(this->call_stack_.begin() + already_sent, this->call_stack_.end());
+  } else {
+    return std::make_tuple(this->call_stack_.begin(), this->call_stack_.end());
+  }
+}
+
+std::tuple<CudaTrace::it_t, CudaTrace::it_t> CudaTrace::fullCallStack()
+{
+  return std::make_tuple(this->call_stack_.begin(), this->call_stack_.end());
 }
 
 void CudaTrace::recordFatbinData(void *data, uint64_t size,

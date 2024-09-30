@@ -97,6 +97,7 @@ public:
 
     void give(const std::string& name)
     {
+      SPDLOG_INFO("Give back chunk {}", name);
       chunks.push(MemChunk{used_chunks[name], name});
     }
 
@@ -107,6 +108,7 @@ public:
 
         /// FIXME: name
         std::string name = fmt::format("/gpuless_{}", counter++);
+        SPDLOG_INFO("Create new chunk {}", name);
         MemChunk chunk{nullptr, name};
         chunk.allocate();
         chunks.push(chunk);
@@ -117,6 +119,7 @@ public:
       chunks.pop();
       used_chunks[ret.name] = ret.ptr;
 
+      SPDLOG_INFO("Use chunk {}", ret.name);
       return ret;
     }
 

@@ -1,4 +1,5 @@
 #include <iostream>
+#include <utility>
 #include <vector>
 
 #include <arpa/inet.h>
@@ -120,13 +121,16 @@ handle_execute_request(const gpuless::FBProtocolMessage *msg, int socket_fd) {
     SPDLOG_INFO("Execution trace of size {}", call_stack.size());
 
     auto& instance = ExecutionStatus::instance();
-    auto& callstack = cuda_trace.callStack();
+    auto [begin, end] = cuda_trace.callStack();
 
-    SPDLOG_DEBUG("Execute callstack of size {} ", callstack.size());
+    //SPDLOG_DEBUG("Execute callstack of size {} ", callstack.size());
 
-    for(size_t idx = 0; idx < callstack.size(); ++idx)
+    //for(size_t idx = 0; idx < callstack.size(); ++idx)
+    int idx = 0; 
+    for(; begin != end; ++begin)
     {
-      auto &apiCall = callstack[idx];
+      //auto &apiCall = callstack[idx];
+      auto &apiCall = *begin;
 
       SPDLOG_DEBUG("Callstack pos {}, is memop {} ", idx, apiCall->is_memop());
 
@@ -152,6 +156,8 @@ handle_execute_request(const gpuless::FBProtocolMessage *msg, int socket_fd) {
         SPDLOG_ERROR("Failed to execute call trace: {} ({})", apiCall->nativeErrorToString(err), err);
         std::exit(EXIT_FAILURE);
       }
+
+      ++idx;
     }
 
     cuda_trace.markSynchronized();
@@ -183,10 +189,15 @@ std::optional<flatbuffers::FlatBufferBuilder> finish_trace_execution(int last_id
   auto &vdev = getCudaVirtualDevice();
 
   auto& instance = ExecutionStatus::instance();
-  auto& callstack = cuda_trace.callStack();
-  for(size_t idx = last_idx; idx < callstack.size(); ++idx)
+  //auto& callstack = cuda_trace.callStack();
+  auto [begin, end] = cuda_trace.callStack();
+  std::advance(begin, last_idx);
+  size_t idx = 0;
+  //for(size_t idx = last_idx; idx < callstack.size(); ++idx)
+  for(; begin != end; ++begin)
   {
-    auto &apiCall = callstack[idx];
+    //auto &apiCall = callstack[idx];
+    auto &apiCall = *begin;
 
     if(apiCall->is_memop() && !instance.can_memcpy()) {
       spdlog::error("Blocking memory operation!");

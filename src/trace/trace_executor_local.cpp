@@ -17,16 +17,21 @@ bool TraceExecutorLocal::init(const char *ip, const short port,
 
 bool TraceExecutorLocal::synchronize(gpuless::CudaTrace &cuda_trace) {
     this->synchronize_counter_++;
-    SPDLOG_INFO(
-        "TraceExecutorLocal::synchronize() [synchronize_counter={}, size={}]",
-        this->synchronize_counter_, cuda_trace.callStack().size());
+    //SPDLOG_INFO(
+    //    "TraceExecutorLocal::synchronize() [synchronize_counter={}, size={}]",
+    //    this->synchronize_counter_, cuda_trace.callStack().size());
 
     auto &vdev = this->cuda_virtual_device_;
     this->cuda_virtual_device_.initRealDevice();
 
     std::set<uint64_t> required_modules;
     std::set<std::string> required_functions;
-    for (auto &apiCall : cuda_trace.callStack()) {
+
+    //for (auto &apiCall : cuda_trace.callStack()) {
+    auto [begin, end] = cuda_trace.callStack();
+    for (; begin != end; begin++) {
+
+        auto& apiCall = *begin;
         auto rmod_vec = apiCall->requiredCudaModuleIds();
         required_modules.insert(rmod_vec.begin(), rmod_vec.end());
         auto rfunc_vec = apiCall->requiredFunctionSymbols();
@@ -89,7 +94,11 @@ bool TraceExecutorLocal::synchronize(gpuless::CudaTrace &cuda_trace) {
         }
     }
 
-    for (auto &apiCall : cuda_trace.callStack()) {
+    //for (auto &apiCall : cuda_trace.callStack()) {
+    std::tie(begin, end) = cuda_trace.callStack();
+    for (; begin != end; begin++) {
+
+        auto& apiCall = *begin;
         SPDLOG_DEBUG("Executing: {}", apiCall->typeName());
         uint64_t err = apiCall->executeNative(vdev);
         if (err != 0) {
