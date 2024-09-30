@@ -122,9 +122,13 @@ handle_execute_request(const gpuless::FBProtocolMessage *msg, int socket_fd) {
     auto& instance = ExecutionStatus::instance();
     auto& callstack = cuda_trace.callStack();
 
+    SPDLOG_DEBUG("Execute callstack of size {} ", callstack.size());
+
     for(size_t idx = 0; idx < callstack.size(); ++idx)
     {
       auto &apiCall = callstack[idx];
+
+      SPDLOG_DEBUG("Callstack pos {}, is memop {} ", idx, apiCall->is_memop());
 
       if(apiCall->is_memop() && !instance.can_memcpy()) {
         spdlog::error("Blocking memory operation!");
@@ -348,6 +352,9 @@ void ShmemServer::_process_client(const void *requestPayload) {
           // response->sum = request->augend + request->addend;
           // std::cout << APP_NAME << " Send Response: " << response->sum <<
           // std::endl;
+
+          auto requestHeader = iox::popo::RequestHeader::fromPayload(requestPayload);
+          SPDLOG_DEBUG("Reply_request {}", requestHeader->getSequenceId());
           server->send(responsePayload).or_else([&](auto &error) {
             std::cout << "Could not send Response! Error: " << error << std::endl;
           });
@@ -432,6 +439,8 @@ void ShmemServer::loop_wait(const char* user_name)
         server->take().and_then(
           [&](auto &requestPayload) {
 
+            auto requestHeader = iox::popo::RequestHeader::fromPayload(requestPayload);
+            SPDLOG_DEBUG("Received_request {} ", requestHeader->getSequenceId());
             if(instance.can_exec()) {
               _process_client(requestPayload);
             } else {

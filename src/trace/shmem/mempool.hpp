@@ -97,7 +97,6 @@ public:
 
     void give(const std::string& name)
     {
-      //std::cerr << "Return " << name << std::endl;
       chunks.push(MemChunk{used_chunks[name], name});
     }
 

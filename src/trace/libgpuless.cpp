@@ -291,6 +291,7 @@ cudaError_t cudaMemcpy(void *dst, const void *src, size_t count,
         if(pool) {
 
           auto chunk = pool->get();
+          SPDLOG_DEBUG("Get pool chunk {}", chunk.name);
           auto rec = std::make_shared<CudaMemcpyH2D>(dst, src, count, chunk.name);
           std::memcpy(chunk.ptr, src, count);
 
@@ -302,7 +303,8 @@ cudaError_t cudaMemcpy(void *dst, const void *src, size_t count,
           std::memcpy(rec->buffer.data(), src, count);
           getCudaTrace().record(rec);
         }
-  
+
+        getTraceExecutor()->send_only(getCudaTrace());
     } else if (kind == cudaMemcpyDeviceToHost) {
         SPDLOG_INFO("{}() [cudaMemcpyDeviceToHost, {} <- {}, pid={}]", __func__,
                     dst, src, getpid());
