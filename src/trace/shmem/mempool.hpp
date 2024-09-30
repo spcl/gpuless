@@ -93,7 +93,14 @@ class MemPool {
 
     int counter = 0;
 
+    std::string _user_name;
+
 public:
+
+    void set_user_name(const char* _user_name)
+    {
+      this->_user_name = _user_name;
+    }
 
     void give(const std::string& name)
     {
@@ -107,7 +114,7 @@ public:
       if(chunks.empty()) {
 
         /// FIXME: name
-        std::string name = fmt::format("/gpuless_{}", counter++);
+        std::string name = fmt::format("/gpuless_{}_{}", _user_name, counter++);
         SPDLOG_INFO("Create new chunk {}", name);
         MemChunk chunk{nullptr, name};
         chunk.allocate();

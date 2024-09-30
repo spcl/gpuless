@@ -34,6 +34,8 @@ TraceExecutorShmem::TraceExecutorShmem()
     const char* app_name = std::getenv("SHMEM_APP_NAME");
     const char* user_name = std::getenv("CONTAINER_NAME");
 
+    _pool.set_user_name(user_name);
+
     if(app_name) {
 
       iox::runtime::PoshRuntime::setRuntimeFactory(runtime_factory);
