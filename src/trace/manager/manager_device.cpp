@@ -447,18 +447,31 @@ void ShmemServer::loop_wait(const char* user_name)
 
       if (notification->doesOriginateFrom(server.get())) {
 
-        server->take().and_then(
-          [&](auto &requestPayload) {
+        bool no_more = false;
 
-            auto requestHeader = iox::popo::RequestHeader::fromPayload(requestPayload);
-            SPDLOG_DEBUG("Received_request {} ", requestHeader->getSequenceId());
-            if(instance.can_exec()) {
-              _process_client(requestPayload);
-            } else {
-              pendingPayload = requestPayload;
+        int idx = 0;
+        while(!no_more) {
+
+          server->take().and_then(
+            [&](auto &requestPayload) {
+
+              ++idx;
+              auto requestHeader = iox::popo::RequestHeader::fromPayload(requestPayload);
+              SPDLOG_DEBUG("Received_request {} ", requestHeader->getSequenceId());
+              if(instance.can_exec()) {
+                _process_client(requestPayload);
+              } else {
+                pendingPayload = requestPayload;
+              }
             }
-          }
-        );
+          ).or_else(
+            [&](auto& res) {
+              no_more = true;
+            }
+          );
+        }
+
+        SPDLOG_INFO("Received {} requests", idx);
 
       } else {
 
