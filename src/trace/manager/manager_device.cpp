@@ -135,7 +135,7 @@ handle_execute_request(const gpuless::FBProtocolMessage *msg, int socket_fd) {
       SPDLOG_DEBUG("Callstack pos {}, is memop {} ", idx, apiCall->is_memop());
 
       if(apiCall->is_memop() && !instance.can_memcpy()) {
-        spdlog::error("Blocking memory operation!");
+        spdlog::error("Blocking memory operation! Saving position {} from {}", idx, cuda_trace.sizeCallStack());
 
         instance.save(idx);
 
@@ -143,7 +143,7 @@ handle_execute_request(const gpuless::FBProtocolMessage *msg, int socket_fd) {
       }
 
       if(apiCall->is_kernel() && !instance.can_exec_kernels()) {
-        spdlog::error("Blocking kernel execution!");
+        spdlog::error("Blocking kernel execution! Saving position {} from {}", idx, cuda_trace.sizeCallStack());
 
         instance.save(idx);
 
@@ -191,6 +191,7 @@ std::optional<flatbuffers::FlatBufferBuilder> finish_trace_execution(int last_id
   auto& instance = ExecutionStatus::instance();
   //auto& callstack = cuda_trace.callStack();
   auto [begin, end] = cuda_trace.callStack();
+  spdlog::error("Finishing trace execution from position {} from {}, {}", last_idx, cuda_trace.sizeCallStack(), std::distance(begin, end));
   std::advance(begin, last_idx);
   size_t idx = 0;
   //for(size_t idx = last_idx; idx < callstack.size(); ++idx)
@@ -200,7 +201,7 @@ std::optional<flatbuffers::FlatBufferBuilder> finish_trace_execution(int last_id
     auto &apiCall = *begin;
 
     if(apiCall->is_memop() && !instance.can_memcpy()) {
-      spdlog::error("Blocking memory operation!");
+      spdlog::error("Blocking memory operation! Saving position {} from {}", idx, cuda_trace.sizeCallStack());
 
       instance.save(idx);
 
@@ -208,7 +209,7 @@ std::optional<flatbuffers::FlatBufferBuilder> finish_trace_execution(int last_id
     }
 
     if(apiCall->is_kernel() && !instance.can_exec_kernels()) {
-      spdlog::error("Blocking kernel execution!");
+      spdlog::error("Blocking kernel execution! Saving position {} from {}", idx, cuda_trace.sizeCallStack());
 
       instance.save(idx);
 
@@ -279,7 +280,7 @@ void *ShmemServer::take() {
 
 void ShmemServer::release(void *ptr) { this->server->releaseRequest(ptr); }
 
-void ShmemServer::_process_remainder()
+bool ShmemServer::_process_remainder()
 {
   auto& instance = ExecutionStatus::instance();
   std::optional<flatbuffers::FlatBufferBuilder> builder = finish_trace_execution(instance.load());
@@ -306,10 +307,14 @@ void ShmemServer::_process_remainder()
         });
 
     server->releaseRequest(requestPayload);
+
+    return true;
+  } else {
+    return false;
   }
 }
 
-void ShmemServer::_process_client(const void *requestPayload) {
+bool ShmemServer::_process_client(const void *requestPayload) {
   // auto request = static_cast<const AddRequest*>(requestPayload);
   // std::cout << APP_NAME << " Got Request: " << request->augend << " + " <<
   // request->addend << std::endl;
@@ -340,7 +345,7 @@ void ShmemServer::_process_client(const void *requestPayload) {
     builder = handle_attributes_request(msg, -1);
   } else {
     SPDLOG_ERROR("Invalid request type");
-    return;
+    return false;
   }
   // auto e = std::chrono::high_resolution_clock::now();
   // auto d =
@@ -376,10 +381,15 @@ void ShmemServer::_process_client(const void *requestPayload) {
         });
 
     server->releaseRequest(requestPayload);
+
+    return true;
   } else {
 
     ExecutionStatus::instance().save_payload(requestPayload);
+
+    return false;
   }
+
 }
 
 iox::popo::WaitSet<>* SigHandler::waitset_ptr;
@@ -436,12 +446,14 @@ void ShmemServer::loop_wait(const char* user_name)
     }
   );
 
+  std::queue<const void*> pendingPayload;
+  bool has_blocked_call = false;
+  auto& instance = ExecutionStatus::instance();
+
   while (!SigHandler::quit) {
 
     auto notificationVector = waitset.wait();
-
-    auto& instance = ExecutionStatus::instance();
-    const void* pendingPayload = nullptr;
+    //const void* pendingPayload = nullptr;
 
     for (auto &notification : notificationVector) {
 
@@ -453,15 +465,19 @@ void ShmemServer::loop_wait(const char* user_name)
         while(!no_more) {
 
           server->take().and_then(
-            [&](auto &requestPayload) {
+            [&](auto &requestPayload) mutable {
 
               ++idx;
               auto requestHeader = iox::popo::RequestHeader::fromPayload(requestPayload);
               SPDLOG_DEBUG("Received_request {} ", requestHeader->getSequenceId());
-              if(instance.can_exec()) {
-                _process_client(requestPayload);
+              //spdlog::error("Received_request {} has blocked call {}", requestHeader->getSequenceId(), has_blocked_call);
+              if(instance.can_exec() && !has_blocked_call) {
+                //has_blocked_call = !_process_client(requestPayload);
+                has_blocked_call = !_process_client(requestPayload);
               } else {
-                pendingPayload = requestPayload;
+                //pendingPayload = requestPayload;
+                //spdlog::error("Executor is blocked, appending payload");
+                pendingPayload.push(requestPayload);
               }
             }
           ).or_else(
@@ -489,16 +505,27 @@ void ShmemServer::loop_wait(const char* user_name)
           instance.exec();
         }
 
-        // Check if there is anything to start
-        if(pendingPayload && instance.can_exec()) {
-          spdlog::error("Process pending payload!");
-          _process_client(pendingPayload);
-          pendingPayload = nullptr;
+        //spdlog::error("Has pending payload? {}", pendingPayload != nullptr);
+
+        //spdlog::error("Has unfinished trace? {}", instance.has_unfinished_trace());
+        if(instance.has_unfinished_trace()) {
+          //spdlog::error("Process unfinished trace from pos {}", instance.load());
+          has_blocked_call = !_process_remainder();
         }
 
-        if(instance.has_unfinished_trace()) {
-          spdlog::error("Process unfinished trace from pos {}", instance.load());
-          _process_remainder();
+        //spdlog::error("Has pending payload? {}", !pendingPayload.empty());
+        // Check if there is anything to start
+        if(!pendingPayload.empty() && instance.can_exec()) {
+
+          while(!pendingPayload.empty() && !has_blocked_call) {
+
+            //spdlog::error("Process pending payload!");
+            auto payload = pendingPayload.front();
+            pendingPayload.pop();
+            has_blocked_call = !_process_client(payload);
+            //pendingPayload = nullptr;
+
+          }
         }
 
       }
