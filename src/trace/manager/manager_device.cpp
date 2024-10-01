@@ -491,18 +491,25 @@ void ShmemServer::loop_wait(const char* user_name)
 
       } else {
 
-        int code = *orchestrator_recv.take()->get();
-        spdlog::error("Message from the orchestrator! Code {}", code);
+        auto val = orchestrator_recv.take();
 
-        auto& instance = ExecutionStatus::instance();
-        if(code == static_cast<int>(GPUlessMessage::LOCK_DEVICE)) {
-          instance.lock();
-        } else if(code == static_cast<int>(GPUlessMessage::BASIC_EXEC)) {
-          instance.basic_exec();
-        } else if(code == static_cast<int>(GPUlessMessage::MEMCPY_ONLY)) {
-          instance.memcpy();
-        } else if(code == static_cast<int>(GPUlessMessage::FULL_EXEC)) {
-          instance.exec();
+        while(!val.has_error()) {
+
+          int code = *val->get();
+          spdlog::error("Message from the orchestrator! Code {}", code);
+
+          auto& instance = ExecutionStatus::instance();
+          if(code == static_cast<int>(GPUlessMessage::LOCK_DEVICE)) {
+            instance.lock();
+          } else if(code == static_cast<int>(GPUlessMessage::BASIC_EXEC)) {
+            instance.basic_exec();
+          } else if(code == static_cast<int>(GPUlessMessage::MEMCPY_ONLY)) {
+            instance.memcpy();
+          } else if(code == static_cast<int>(GPUlessMessage::FULL_EXEC)) {
+            instance.exec();
+          }
+
+          val = orchestrator_recv.take();
         }
 
         //spdlog::error("Has pending payload? {}", pendingPayload != nullptr);
