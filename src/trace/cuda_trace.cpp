@@ -57,6 +57,11 @@ std::tuple<CudaTrace::it_t, CudaTrace::it_t> CudaTrace::callStack()
   }
 }
 
+size_t CudaTrace::sizeCallStack()
+{
+  return this->call_stack_.size();
+}
+
 std::tuple<CudaTrace::it_t, CudaTrace::it_t> CudaTrace::fullCallStack()
 {
   return std::make_tuple(this->call_stack_.begin(), this->call_stack_.end());

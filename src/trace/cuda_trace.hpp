@@ -40,6 +40,7 @@ class CudaTrace {
     //std::vector<std::shared_ptr<AbstractCudaApiCall>>& callStack();
     std::tuple<it_t, it_t> callStack();
     std::tuple<it_t, it_t> fullCallStack();
+    size_t sizeCallStack();
 
     std::map<std::string, std::pair<uint64_t, bool>> &getSymbolToModuleId();
     std::map<uint64_t, std::tuple<void *, uint64_t, bool>> &
