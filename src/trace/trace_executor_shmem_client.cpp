@@ -271,7 +271,7 @@ bool TraceExecutorShmem::send_only(CudaTrace &cuda_trace)
       val = client->take();
     }
 
-    std::cerr << "Previous synchronization point " << prev_synchronization << " new one " << last_synchronized << std::endl;
+    //std::cerr << "Previous synchronization point " << prev_synchronization << " new one " << last_synchronized << std::endl;
     int64_t synchronized_calls = last_synchronized - prev_synchronization;
     if(synchronized_calls > 0) {
 
