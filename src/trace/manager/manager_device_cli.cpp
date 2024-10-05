@@ -13,7 +13,26 @@ int main(int argc, char **argv) {
   std::string device{argv[1]};
   std::string manager_type{argv[2]};
 
+  char* cpu_idx = std::getenv("CPU_BIND_IDX");
+  if(cpu_idx) {
+    int idx = std::atoi(cpu_idx);
+
+    cpu_set_t set;
+    CPU_ZERO(&set);
+    CPU_SET(idx, &set);
+    pid_t pid = getpid();
+
+    spdlog::info("Setting CPU to: {}", idx);
+    if(sched_setaffinity(pid, sizeof(set), &set) == -1) {
+			spdlog::error("Couldn't set the CPU affinity! Error {}", strerror(errno));
+			exit(EXIT_FAILURE);
+    }
+  }
+
   prctl(PR_SET_PDEATHSIG, SIGHUP);
+
+  int cpu = sched_getcpu();
+  spdlog::info("Running on CPU: {}", cpu);
 
   if (manager_type == "tcp") {
     if (argc != 4)
