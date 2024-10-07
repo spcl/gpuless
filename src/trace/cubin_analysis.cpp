@@ -7,6 +7,7 @@
 #include <spdlog/spdlog.h>
 
 #include "cubin_analysis.hpp"
+#include "../utils.hpp"
 
 std::map<std::string, PtxParameterType> &getStrToPtxParameterType() {
     static std::map<std::string, PtxParameterType> map_ = {
@@ -308,47 +309,30 @@ bool CubinAnalyzerELF::isInitialized()
 
 bool CubinAnalyzerELF::loadAnalysisFromCache(const std::filesystem::path &fname)
 {
-    //std::size_t fname_hash = this->pathToHash(fname);
-    //std::filesystem::path base_dir(std::getenv("HOME"));
-    //if (const char* scratch = std::getenv("SCRATCH")) {
-    //    base_dir = scratch;
-    //}
-    //std::filesystem::path cache_dir = base_dir / ".cache" / "libgpuless";
-    //std::filesystem::path cache_file = cache_dir / std::to_string(fname_hash);
-    //if (!std::filesystem::is_regular_file(cache_file)) {
-    //    return false;
-    //}
+  std::ifstream infile(fname);
+  if (!infile) {
+    spdlog::error("Unable to open file for reading: {}", fname.string());
+    return false;
+  }
 
-    //std::map<std::string, std::vector<PTXKParamInfo>> tmp_map;
-    //std::ifstream in(cache_file);
 
-    //while (true) {
-    //    std::string symbol;
-    //    int n_params;
-    //    in >> symbol;
-    //    in >> n_params;
+  std::string line;
+  std::vector<std::string> elems;
+  while (std::getline(infile, line)) {
 
-    //    std::vector<PTXKParamInfo> kparam_infos;
-    //    for (int i = 0; i < n_params; i++) {
-    //        PTXKParamInfo kparam_info;
-    //        uint64_t u64_type;
-    //        in >> kparam_info.paramName;
-    //        in >> u64_type;
-    //        kparam_info.type = PtxParameterType(u64_type);
-    //        in >> kparam_info.typeSize;
-    //        in >> kparam_info.align;
-    //        in >> kparam_info.size;
-    //        kparam_infos.push_back(kparam_info);
-    //    }
+    string_split(line, ',', elems);
 
-    //    tmp_map.emplace(symbol, kparam_infos);
-    //    if (in.eof()) {
-    //        break;
-    //    }
-    //}
-    //in.close();
-    //this->kernel_to_kparaminfos.insert(tmp_map.begin(), tmp_map.end());
-    //return true;
+    auto& kernel_name = elems[0];
+    std::vector<int> sizes;
+    for(int i = 1; i < elems.size(); ++i) {
+      sizes.emplace_back(std::stoi(elems[i]));
+    }
+
+    this->kernel_to_kparaminfos[kernel_name] = sizes;
+  }
+
+  infile.close();
+  return true;
 }
 
 void CubinAnalyzerELF::storeAnalysisToCache(
