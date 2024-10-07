@@ -208,6 +208,18 @@ if(BUILD_SHMEM)
   target_link_libraries(gpuless iceoryx_posh::iceoryx_posh iceoryx_hoofs::iceoryx_hoofs)
 endif()
 
+add_executable(cubin_analyzer
+    src/cubin_analyzer.cpp
+    src/trace/cubin_analysis.cpp
+)
+target_include_directories(
+    cubin_analyzer SYSTEM PRIVATE $<TARGET_PROPERTY:spdlog::spdlog,INTERFACE_INCLUDE_DIRECTORIES>
+)
+add_dependencies(cubin_analyzer spdlog)
+target_link_libraries(cubin_analyzer
+    spdlog::spdlog
+)
+
 add_custom_command(
     TARGET gpuless POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy

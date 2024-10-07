@@ -331,7 +331,7 @@ CudaLaunchKernel::CudaLaunchKernel(
     std::vector<std::string> required_function_symbols, const void *fnPtr,
     const dim3 &gridDim, const dim3 &blockDim, size_t sharedMem,
     cudaStream_t stream, std::vector<std::vector<uint8_t>> &paramBuffers,
-    std::vector<KParamInfo> &paramInfos)
+    std::vector<PTXKParamInfo> &paramInfos)
     : symbol(symbol), required_cuda_modules_(required_cuda_modules),
       required_function_symbols_(required_function_symbols), fnPtr(fnPtr),
       gridDim(gridDim), blockDim(blockDim), sharedMem(sharedMem),
@@ -427,9 +427,9 @@ CudaLaunchKernel::CudaLaunchKernel(const FBCudaApiCall *fb_cuda_api_call) {
         std::memcpy(pb.back().data(), b->buffer()->data(), b->buffer()->size());
     }
 
-    std::vector<KParamInfo> kpi;
+    std::vector<PTXKParamInfo> kpi;
     for (const auto &i : *c->param_infos()) {
-        KParamInfo info{i->name()->str(),
+        PTXKParamInfo info{i->name()->str(),
                         static_cast<PtxParameterType>(i->ptx_param_type()),
                         static_cast<int>(i->type_size()),
                         static_cast<int>(i->align()),

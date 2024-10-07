@@ -147,8 +147,8 @@ std::shared_ptr<TraceExecutor> getTraceExecutor(bool clean) {
     return trace_executor;
 }
 
-static CubinAnalyzer &getCubinAnalyzer() {
-    static CubinAnalyzer cubin_analyzer;
+static CubinAnalyzerPTX &getCubinAnalyzer() {
+    static CubinAnalyzerPTX cubin_analyzer;
     return cubin_analyzer;
 }
 
@@ -402,7 +402,7 @@ cudaError_t cudaLaunchKernel(const void *func, dim3 gridDim, dim3 blockDim,
     SPDLOG_INFO("cudaLaunchKernel({})", cpp_demangle(symbol).c_str());
     // SPDLOG_DEBUG("")
 
-    std::vector<KParamInfo> paramInfos;
+    std::vector<PTXKParamInfo> paramInfos;
     const auto &analyzer = getCubinAnalyzer();
     if (!analyzer.kernel_parameters(symbol, paramInfos)) {
         EXIT_UNRECOVERABLE("unable to look up kernel parameter data");

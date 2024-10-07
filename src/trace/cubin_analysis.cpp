@@ -52,10 +52,10 @@ static std::string exec(const char *cmd) {
     return result;
 }
 
-bool CubinAnalyzer::isInitialized() { return this->initialized_; }
+bool CubinAnalyzerPTX::isInitialized() { return this->initialized_; }
 
 PtxParameterType
-CubinAnalyzer::ptxParameterTypeFromString(const std::string &str) {
+CubinAnalyzerPTX::ptxParameterTypeFromString(const std::string &str) {
     auto it = getStrToPtxParameterType().find(str);
     if (it == getStrToPtxParameterType().end()) {
         return PtxParameterType::invalid;
@@ -63,7 +63,7 @@ CubinAnalyzer::ptxParameterTypeFromString(const std::string &str) {
     return it->second;
 }
 
-int CubinAnalyzer::byteSizePtxParameterType(PtxParameterType type) {
+int CubinAnalyzerPTX::byteSizePtxParameterType(PtxParameterType type) {
     auto it = getPtxParameterTypeToSize().find(type);
     if (it == getPtxParameterTypeToSize().end()) {
         return -1;
@@ -71,9 +71,9 @@ int CubinAnalyzer::byteSizePtxParameterType(PtxParameterType type) {
     return it->second;
 }
 
-std::vector<KParamInfo>
-CubinAnalyzer::parsePtxParameters(const std::string &params) {
-    std::vector<KParamInfo> ps;
+std::vector<PTXKParamInfo>
+CubinAnalyzerPTX::parsePtxParameters(const std::string &params) {
+    std::vector<PTXKParamInfo> ps;
 
     static std::regex r_param(
         "\\.param\\s*(?:\\.align\\s*([0-9]*)\\s*)?\\.([a-zA-Z0-9]*)\\s*([a-zA-"
@@ -83,6 +83,7 @@ CubinAnalyzer::parsePtxParameters(const std::string &params) {
     std::sregex_iterator i =
         std::sregex_iterator(params.begin(), params.end(), r_param);
     for (; i != std::sregex_iterator(); ++i) {
+
         std::smatch m = *i;
         const std::string &align = m[1];
         const std::string &type = m[2];
@@ -101,7 +102,7 @@ CubinAnalyzer::parsePtxParameters(const std::string &params) {
 
         PtxParameterType ptxParameterType = ptxParameterTypeFromString(type);
         int typeSize = byteSizePtxParameterType(ptxParameterType);
-        ps.push_back(KParamInfo{
+        ps.push_back(PTXKParamInfo{
             name,
             ptxParameterType,
             typeSize,
@@ -113,12 +114,12 @@ CubinAnalyzer::parsePtxParameters(const std::string &params) {
     return ps;
 }
 
-size_t CubinAnalyzer::pathToHash(const std::filesystem::path &path) {
+size_t CubinAnalyzerPTX::pathToHash(const std::filesystem::path &path) {
     auto base = path.filename();
     return std::hash<std::string>{}(base.string());
 }
 
-bool CubinAnalyzer::isCached(const std::filesystem::path &fname) {
+bool CubinAnalyzerPTX::isCached(const std::filesystem::path &fname) {
     std::size_t fname_hash = this->pathToHash(fname);
     std::filesystem::path base_dir(std::getenv("HOME"));
     if (const char* scratch = std::getenv("SCRATCH")) {
@@ -135,7 +136,7 @@ bool CubinAnalyzer::isCached(const std::filesystem::path &fname) {
     return false;
 }
 
-bool CubinAnalyzer::loadAnalysisFromCache(const std::filesystem::path &fname) {
+bool CubinAnalyzerPTX::loadAnalysisFromCache(const std::filesystem::path &fname) {
     std::size_t fname_hash = this->pathToHash(fname);
     std::filesystem::path base_dir(std::getenv("HOME"));
     if (const char* scratch = std::getenv("SCRATCH")) {
@@ -147,7 +148,7 @@ bool CubinAnalyzer::loadAnalysisFromCache(const std::filesystem::path &fname) {
         return false;
     }
 
-    std::map<std::string, std::vector<KParamInfo>> tmp_map;
+    std::map<std::string, std::vector<PTXKParamInfo>> tmp_map;
     std::ifstream in(cache_file);
 
     while (true) {
@@ -156,9 +157,9 @@ bool CubinAnalyzer::loadAnalysisFromCache(const std::filesystem::path &fname) {
         in >> symbol;
         in >> n_params;
 
-        std::vector<KParamInfo> kparam_infos;
+        std::vector<PTXKParamInfo> kparam_infos;
         for (int i = 0; i < n_params; i++) {
-            KParamInfo kparam_info;
+            PTXKParamInfo kparam_info;
             uint64_t u64_type;
             in >> kparam_info.paramName;
             in >> u64_type;
@@ -179,10 +180,10 @@ bool CubinAnalyzer::loadAnalysisFromCache(const std::filesystem::path &fname) {
     return true;
 }
 
-void CubinAnalyzer::storeAnalysisToCache(
+void CubinAnalyzerPTX::storeAnalysisToCache(
     const std::filesystem::path &fname,
-    const std::map<std::string, std::vector<KParamInfo>> &data) {
-    SPDLOG_INFO("Storing analysis to cache: {}", fname.string());
+    const std::map<std::string, std::vector<PTXKParamInfo>> &data) {
+  spdlog::error("Storing analysis to cache: {}", fname.string());
     std::size_t fname_hash = this->pathToHash(fname);
     std::filesystem::path base_dir(std::getenv("HOME"));
     if (const char* scratch = std::getenv("SCRATCH")) {
@@ -197,7 +198,7 @@ void CubinAnalyzer::storeAnalysisToCache(
     std::fstream out(cache_file, std::fstream::app);
     for (const auto &d : data) {
         const std::string &symbol = d.first;
-        const std::vector<KParamInfo> &kparam_infos = d.second;
+        const std::vector<PTXKParamInfo> &kparam_infos = d.second;
         out << symbol << std::endl << kparam_infos.size() << std::endl;
         for (const auto &p : kparam_infos) {
             out << p.paramName << std::endl;
@@ -210,7 +211,7 @@ void CubinAnalyzer::storeAnalysisToCache(
     out.close();
 }
 
-bool CubinAnalyzer::analyzePtx(const std::filesystem::path &fname,
+bool CubinAnalyzerPTX::analyzePtx(const std::filesystem::path &fname,
                                int major_version, int minor_version) {
     auto tmp = std::filesystem::temp_directory_path() / "libgpuless";
     SPDLOG_INFO("Using tmp directory: {}", tmp.string());
@@ -243,13 +244,13 @@ bool CubinAnalyzer::analyzePtx(const std::filesystem::path &fname,
         std::string ptx_data = ss.str();
         std::sregex_iterator i = std::sregex_iterator(
             ptx_data.begin(), ptx_data.end(), r_func_parameters);
-        std::map<std::string, std::vector<KParamInfo>> tmp_map;
+        std::map<std::string, std::vector<PTXKParamInfo>> tmp_map;
         for (; i != std::sregex_iterator(); ++i) {
             std::smatch m = *i;
             const std::string &entry = m[1];
             const std::string &params = m[2];
 
-            std::vector<KParamInfo> param_infos = parsePtxParameters(params);
+            std::vector<PTXKParamInfo> param_infos = parsePtxParameters(params);
             tmp_map.emplace(std::make_pair(entry, param_infos));
         }
         this->storeAnalysisToCache(std::filesystem::canonical(fname), tmp_map);
@@ -259,13 +260,13 @@ bool CubinAnalyzer::analyzePtx(const std::filesystem::path &fname,
     return true;
 }
 
-bool CubinAnalyzer::analyze(const std::vector<std::string>& cuda_binaries,
+bool CubinAnalyzerPTX::analyze(const std::vector<std::string>& cuda_binaries,
                             int major_version, int minor_version) {
     bool ret = false;
 
     for (const auto &cbin : cuda_binaries) {
         std::filesystem::path cuda_binary(cbin);
-        SPDLOG_DEBUG("Analyzing: {}", cuda_binary.string());
+        spdlog::error("Analyzing: {}", cuda_binary.string());
         if (!std::filesystem::exists(cuda_binary) ||
             !std::filesystem::is_regular_file(cuda_binary)) {
             SPDLOG_ERROR("Invalid file: {}", cbin);
@@ -285,8 +286,8 @@ bool CubinAnalyzer::analyze(const std::vector<std::string>& cuda_binaries,
     return ret;
 }
 
-bool CubinAnalyzer::kernel_parameters(std::string &kernel,
-                                      std::vector<KParamInfo> &params) const {
+bool CubinAnalyzerPTX::kernel_parameters(std::string &kernel,
+                                      std::vector<PTXKParamInfo> &params) const {
     auto it = this->kernel_to_kparaminfos.find(kernel);
     if (it != this->kernel_to_kparaminfos.end()) {
         params = it->second;
@@ -295,7 +296,201 @@ bool CubinAnalyzer::kernel_parameters(std::string &kernel,
     return false;
 }
 
-bool CubinAnalyzer::kernel_module(std::string &kernel,
+bool CubinAnalyzerPTX::kernel_module(std::string &kernel,
                                   std::vector<uint8_t> &module_data) {
     return true;
 }
+
+bool CubinAnalyzerELF::isInitialized()
+{
+  return this->initialized_;
+}
+
+bool CubinAnalyzerELF::loadAnalysisFromCache(const std::filesystem::path &fname)
+{
+    //std::size_t fname_hash = this->pathToHash(fname);
+    //std::filesystem::path base_dir(std::getenv("HOME"));
+    //if (const char* scratch = std::getenv("SCRATCH")) {
+    //    base_dir = scratch;
+    //}
+    //std::filesystem::path cache_dir = base_dir / ".cache" / "libgpuless";
+    //std::filesystem::path cache_file = cache_dir / std::to_string(fname_hash);
+    //if (!std::filesystem::is_regular_file(cache_file)) {
+    //    return false;
+    //}
+
+    //std::map<std::string, std::vector<PTXKParamInfo>> tmp_map;
+    //std::ifstream in(cache_file);
+
+    //while (true) {
+    //    std::string symbol;
+    //    int n_params;
+    //    in >> symbol;
+    //    in >> n_params;
+
+    //    std::vector<PTXKParamInfo> kparam_infos;
+    //    for (int i = 0; i < n_params; i++) {
+    //        PTXKParamInfo kparam_info;
+    //        uint64_t u64_type;
+    //        in >> kparam_info.paramName;
+    //        in >> u64_type;
+    //        kparam_info.type = PtxParameterType(u64_type);
+    //        in >> kparam_info.typeSize;
+    //        in >> kparam_info.align;
+    //        in >> kparam_info.size;
+    //        kparam_infos.push_back(kparam_info);
+    //    }
+
+    //    tmp_map.emplace(symbol, kparam_infos);
+    //    if (in.eof()) {
+    //        break;
+    //    }
+    //}
+    //in.close();
+    //this->kernel_to_kparaminfos.insert(tmp_map.begin(), tmp_map.end());
+    //return true;
+}
+
+void CubinAnalyzerELF::storeAnalysisToCache(
+    const std::filesystem::path &fname
+)
+{
+  std::ofstream outfile(fname);
+  if (!outfile) {
+    spdlog::error("Unable to open file for writing: {}", fname.string());
+  }
+
+  for (const auto& [kernel, sizes] : kernel_to_kparaminfos) {
+      outfile << kernel << ",";
+      for (size_t i = 0; i < sizes.size(); ++i) {
+          if (sizes[i] != 0) {
+              outfile << sizes[i] << ",";
+          }
+      }
+      outfile << "\n";
+  }
+
+  outfile.close();
+}
+
+bool CubinAnalyzerELF::analyzeELF(
+  const std::filesystem::path &fname,
+  const std::string& compute_version
+)
+{
+  std::string cmd = fmt::format(
+    "cuobjdump --gpu-architecture sm_{} -elf {}",
+    compute_version, fname.string()
+  );
+
+  std::string output;
+
+  struct closepipe_deleter {
+    void operator()(FILE * p) const {
+      pclose(p);
+    }
+  };
+  std::unique_ptr<FILE, closepipe_deleter> pipe(popen(cmd.c_str(), "r"));
+
+  if (!pipe) {
+    spdlog::error("Running failed! Failed command {}", cmd);
+  }
+
+  // Max line length 256 chars
+  std::array<char, 256> buffer;
+  //std::string buffer{256};
+  std::string current_kernel;
+  std::vector<int> sizes{};
+
+  while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
+
+    std::string_view line(buffer.data());
+
+    if (line.find(".nv.info.") != std::string::npos) {
+
+      if (!current_kernel.empty() && !sizes.empty()) {
+          kernel_to_kparaminfos[current_kernel] = sizes;
+      }
+
+      current_kernel = line.substr(line.find(".nv.info.") + 9);
+      // Drop newline character
+      current_kernel.pop_back();
+      sizes = std::vector<int>{};
+
+    } else if (line.find("Attribute:	EIATTR_KPARAM_INFO") != std::string::npos) {
+
+      // Get one more line - skip format
+      if(fgets(buffer.data(), buffer.size(), pipe.get()) == nullptr) {
+        spdlog::error("Something broken! Empty line after parameter");
+        return false;
+      }
+      // Get one more line - finally param data
+      if(fgets(buffer.data(), buffer.size(), pipe.get()) == nullptr) {
+        spdlog::error("Something broken! Empty line after parameter");
+        return false;
+      }
+
+      std::string param_line(buffer.data());
+
+      size_t ordinal_pos = param_line.find("Ordinal : ");
+      size_t size_pos = param_line.find("Size    : ");
+      if (ordinal_pos != std::string::npos && size_pos != std::string::npos) {
+
+        int ordinal = std::stoi(param_line.substr(ordinal_pos + 10, 4), nullptr, 16);
+        int size = std::stoi(param_line.substr(size_pos + 10, 4), nullptr, 16);
+
+        if(sizes.size() <= ordinal) {
+          sizes.resize(ordinal + 1);
+        }
+        if (ordinal < 256) {
+          sizes[ordinal] = size;
+        }
+      }
+
+    }
+  }
+
+  if(!current_kernel.empty()) {
+    kernel_to_kparaminfos[current_kernel] = sizes;
+  }
+
+
+  return true;
+}
+
+bool CubinAnalyzerELF::analyze(
+  const std::vector<std::string>& cuda_binaries,
+  const std::string& compute_version
+)
+{
+  bool ret = false;
+
+  for (const auto &cbin : cuda_binaries) {
+
+    std::filesystem::path cuda_binary(cbin);
+    spdlog::error("Analyzing: {}", cuda_binary.string());
+    if (!std::filesystem::exists(cuda_binary) ||
+        !std::filesystem::is_regular_file(cuda_binary)) {
+        SPDLOG_ERROR("Invalid file: {}", cbin);
+        return false;
+    }
+
+    this->analyzeELF(cbin, compute_version);
+  }
+
+  this->initialized_ = true;
+  return ret;
+}
+
+bool CubinAnalyzerELF::kernel_parameters(
+    std::string &kernel, std::vector<int> &params
+) const
+{
+    auto it = this->kernel_to_kparaminfos.find(kernel);
+    if (it != this->kernel_to_kparaminfos.end()) {
+        params = it->second;
+        return true;
+    }
+    return false;
+}
+
