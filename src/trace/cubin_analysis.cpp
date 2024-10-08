@@ -315,20 +315,20 @@ bool CubinAnalyzerELF::loadAnalysisFromCache(const std::filesystem::path &fname)
     return false;
   }
 
-
   std::string line;
   std::vector<std::string> elems;
-  while (std::getline(infile, line)) {
+  while(std::getline(infile, line)) {
 
     string_split(line, ',', elems);
 
     auto& kernel_name = elems[0];
     std::vector<int> sizes;
-    for(int i = 1; i < elems.size(); ++i) {
+    for(size_t i = 1; i < elems.size(); ++i) {
       sizes.emplace_back(std::stoi(elems[i]));
     }
 
     this->kernel_to_kparaminfos[kernel_name] = sizes;
+    elems.resize(0);
   }
 
   infile.close();

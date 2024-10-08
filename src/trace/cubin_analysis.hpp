@@ -78,8 +78,6 @@ class CubinAnalyzerELF {
     bool initialized_ = false;
     std::map<std::string, std::vector<int>> kernel_to_kparaminfos;
 
-    bool loadAnalysisFromCache(const std::filesystem::path &fname);
-
     std::vector<ELFKParamInfo> parseElfParameters(const std::string &params);
     bool analyzeELF(const std::filesystem::path &path, const std::string& compute_version);
 
@@ -88,6 +86,7 @@ class CubinAnalyzerELF {
     bool isInitialized();
     bool analyze(const std::vector<std::string>& cuda_binaries, const std::string& compute_version);
     void storeAnalysisToCache(const std::filesystem::path &fname);
+    bool loadAnalysisFromCache(const std::filesystem::path &fname);
 
     bool kernel_parameters(std::string &kernel, std::vector<int> &params) const;
 };
