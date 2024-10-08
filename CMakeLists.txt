@@ -36,6 +36,8 @@ if(BUILD_SHMEM)
   find_package(iceoryx_hoofs CONFIG REQUIRED)
 endif()
 
+add_compile_definitions(GPULESS_ELF_ANALYZER)
+
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 link_directories(${CMAKE_CURRENT_SOURCE_DIR}/lib)
 
@@ -211,13 +213,16 @@ endif()
 add_executable(cubin_analyzer
     src/cubin_analyzer.cpp
     src/trace/cubin_analysis.cpp
+    src/utils.cpp
 )
 target_include_directories(
     cubin_analyzer SYSTEM PRIVATE $<TARGET_PROPERTY:spdlog::spdlog,INTERFACE_INCLUDE_DIRECTORIES>
 )
 add_dependencies(cubin_analyzer spdlog)
 target_link_libraries(cubin_analyzer
+    iberty
     spdlog::spdlog
+    CUDA::cuda_driver
 )
 
 add_custom_command(

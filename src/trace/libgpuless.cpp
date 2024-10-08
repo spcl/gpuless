@@ -152,9 +152,32 @@ static CubinAnalyzerPTX &getCubinAnalyzer() {
     return cubin_analyzer;
 }
 
+static CubinAnalyzerELF &getCubinAnalyzerELF() {
+    static CubinAnalyzerELF cubin_analyzer;
+    return cubin_analyzer;
+}
+
 CudaTrace &getCudaTrace() {
     static CudaTrace cuda_trace;
 
+#if defined(GPULESS_ELF_ANALYZER)
+    if (!getCubinAnalyzerELF().isInitialized()) {
+      char* elf_defs = std::getenv("GPULESS_ELF_DEFINITION");
+      if(elf_defs == nullptr) {
+        spdlog::error("please set GPULESS_ELF_DEFINITION environment variable");
+        std::exit(EXIT_FAILURE);
+      }
+
+      std::vector<std::string> files;
+      string_split(std::string(elf_defs), ',', files);
+      for(auto& file : files) {
+        SPDLOG_INFO("Reading kernel data from {}", file);
+        if(!getCubinAnalyzerELF().loadAnalysisFromCache(file)) {
+          std::exit(EXIT_FAILURE);
+        }
+      }
+    }
+#else
     if (!getCubinAnalyzer().isInitialized()) {
         char *cuda_binary = std::getenv("CUDA_BINARY");
         if (cuda_binary == nullptr) {
@@ -169,6 +192,7 @@ CudaTrace &getCudaTrace() {
         getCubinAnalyzer().analyze(binaries, CUDA_MAJOR_VERSION,
                                    CUDA_MINOR_VERSION);
     }
+#endif
 
     return cuda_trace;
 }
@@ -402,6 +426,20 @@ cudaError_t cudaLaunchKernel(const void *func, dim3 gridDim, dim3 blockDim,
     SPDLOG_INFO("cudaLaunchKernel({})", cpp_demangle(symbol).c_str());
     // SPDLOG_DEBUG("")
 
+#if defined(GPULESS_ELF_ANALYZER)
+    std::vector<int> paramInfos;
+    const auto &analyzer = getCubinAnalyzerELF();
+    if (!analyzer.kernel_parameters(symbol, paramInfos)) {
+        EXIT_UNRECOVERABLE("unable to look up kernel parameter data");
+    }
+
+    std::vector<std::vector<uint8_t>> paramBuffers(paramInfos.size());
+    for (unsigned i = 0; i < paramInfos.size(); i++) {
+        const auto &p = paramInfos[i];
+        paramBuffers[i].resize(p);
+        std::memcpy(paramBuffers[i].data(), args[i], p);
+    }
+#else
     std::vector<PTXKParamInfo> paramInfos;
     const auto &analyzer = getCubinAnalyzer();
     if (!analyzer.kernel_parameters(symbol, paramInfos)) {
@@ -424,6 +462,7 @@ cudaError_t cudaLaunchKernel(const void *func, dim3 gridDim, dim3 blockDim,
         paramBuffers[i].resize(p.size * p.typeSize);
         std::memcpy(paramBuffers[i].data(), args[i], p.size * p.typeSize);
     }
+#endif
 
     auto &cuda_trace = getCudaTrace();
     auto &symbol_to_module_id_map = cuda_trace.getSymbolToModuleId();

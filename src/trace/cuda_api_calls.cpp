@@ -326,6 +326,18 @@ CudaFree::CudaFree(const FBCudaApiCall *fb_cuda_api_call) {
 /*
  * cudaLaunchKernel
  */
+#if defined(GPULESS_ELF_ANALYZER)
+CudaLaunchKernel::CudaLaunchKernel(
+    std::string symbol, std::vector<uint64_t> required_cuda_modules,
+    std::vector<std::string> required_function_symbols, const void *fnPtr,
+    const dim3 &gridDim, const dim3 &blockDim, size_t sharedMem,
+    cudaStream_t stream, std::vector<std::vector<uint8_t>> &paramBuffers,
+    std::vector<int> &paramInfos)
+    : symbol(symbol), required_cuda_modules_(required_cuda_modules),
+      required_function_symbols_(required_function_symbols), fnPtr(fnPtr),
+      gridDim(gridDim), blockDim(blockDim), sharedMem(sharedMem),
+      stream(stream), paramBuffers(paramBuffers), paramInfos(paramInfos) {}
+#else
 CudaLaunchKernel::CudaLaunchKernel(
     std::string symbol, std::vector<uint64_t> required_cuda_modules,
     std::vector<std::string> required_function_symbols, const void *fnPtr,
@@ -336,6 +348,7 @@ CudaLaunchKernel::CudaLaunchKernel(
       required_function_symbols_(required_function_symbols), fnPtr(fnPtr),
       gridDim(gridDim), blockDim(blockDim), sharedMem(sharedMem),
       stream(stream), paramBuffers(paramBuffers), paramInfos(paramInfos) {}
+#endif
 
 uint64_t CudaLaunchKernel::executeNative(CudaVirtualDevice &vdev) {
     static auto real = GET_REAL_FUNCTION(cuLaunchKernel);
@@ -387,10 +400,19 @@ CudaLaunchKernel::fbSerialize(flatbuffers::FlatBufferBuilder &builder) {
     }
     std::vector<flatbuffers::Offset<FBParamInfo>> fb_param_infos;
     for (const auto &p : this->paramInfos) {
+        // FIXME: proper structure without unnecessary data
+#if defined(GPULESS_ELF_ANALYZER)
+        fb_param_infos.push_back(CreateFBParamInfo(builder, 
+          builder.CreateString(""),
+          FBPtxParameterType_s8,
+          0, 0, p
+        ));
+#else
         fb_param_infos.push_back(
             CreateFBParamInfo(builder, builder.CreateString(p.paramName),
                               static_cast<FBPtxParameterType>(p.type),
                               p.typeSize, p.align, p.size));
+#endif
     }
 
     auto gdim = FBDim3{this->gridDim.x, this->gridDim.y, this->gridDim.z};
@@ -427,6 +449,12 @@ CudaLaunchKernel::CudaLaunchKernel(const FBCudaApiCall *fb_cuda_api_call) {
         std::memcpy(pb.back().data(), b->buffer()->data(), b->buffer()->size());
     }
 
+#if defined(GPULESS_ELF_ANALYZER)
+    std::vector<int> kpi;
+    for (const auto &i : *c->param_infos()) {
+        kpi.push_back(static_cast<int>(i->size()));
+    }
+#else
     std::vector<PTXKParamInfo> kpi;
     for (const auto &i : *c->param_infos()) {
         PTXKParamInfo info{i->name()->str(),
@@ -436,6 +464,7 @@ CudaLaunchKernel::CudaLaunchKernel(const FBCudaApiCall *fb_cuda_api_call) {
                         static_cast<int>(i->size())};
         kpi.push_back(info);
     }
+#endif
 
     this->symbol = c->symbol()->str();
 
