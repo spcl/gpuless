@@ -307,6 +307,21 @@ bool CubinAnalyzerELF::isInitialized()
   return this->initialized_;
 }
 
+bool CubinAnalyzerELF::analyze(const std::vector<std::string>& elf_data)
+{
+  for(auto& file : elf_data) {
+    SPDLOG_INFO("Reading kernel data from {}", file);
+    if(!loadAnalysisFromCache(file)) {
+      spdlog::error("Couldn't read data from {}!", file);
+      return false;
+    }
+  }
+
+  this->initialized_ = true;
+
+  return true;
+}
+
 bool CubinAnalyzerELF::loadAnalysisFromCache(const std::filesystem::path &fname)
 {
   std::ifstream infile(fname);
@@ -381,7 +396,7 @@ bool CubinAnalyzerELF::analyzeELF(
   }
 
   // Max line length 256 chars
-  std::array<char, 256> buffer;
+  std::array<char, 1024> buffer;
   //std::string buffer{256};
   std::string current_kernel;
   std::vector<int> sizes{};
@@ -420,8 +435,16 @@ bool CubinAnalyzerELF::analyzeELF(
       size_t size_pos = param_line.find("Size    : ");
       if (ordinal_pos != std::string::npos && size_pos != std::string::npos) {
 
-        int ordinal = std::stoi(param_line.substr(ordinal_pos + 10, 4), nullptr, 16);
-        int size = std::stoi(param_line.substr(size_pos + 10, 4), nullptr, 16);
+        size_t ordinal_start = ordinal_pos + 10;
+        size_t ordinal_end = param_line.find_first_not_of("0123456789ABCDEFabcdefx", ordinal_start);
+        std::string ordinal_str = param_line.substr(ordinal_start, ordinal_end - ordinal_start);
+
+        size_t size_start = size_pos + 10;
+        size_t size_end = param_line.find_first_not_of("0123456789ABCDEFabcdefx", size_start);
+        std::string size_str = param_line.substr(size_start, size_end - size_start);
+
+        int ordinal = std::stoi(ordinal_str, nullptr, 16);
+        int size = std::stoi(size_str, nullptr, 16);
 
         if(sizes.size() <= ordinal) {
           sizes.resize(ordinal + 1);
@@ -437,7 +460,6 @@ bool CubinAnalyzerELF::analyzeELF(
   if(!current_kernel.empty()) {
     kernel_to_kparaminfos[current_kernel] = sizes;
   }
-
 
   return true;
 }

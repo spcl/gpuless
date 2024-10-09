@@ -87,6 +87,7 @@ class CubinAnalyzerELF {
     bool analyze(const std::vector<std::string>& cuda_binaries, const std::string& compute_version);
     void storeAnalysisToCache(const std::filesystem::path &fname);
     bool loadAnalysisFromCache(const std::filesystem::path &fname);
+    bool analyze(const std::vector<std::string>& elf_data);
 
     bool kernel_parameters(std::string &kernel, std::vector<int> &params) const;
 };
