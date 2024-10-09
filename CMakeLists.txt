@@ -133,6 +133,7 @@ target_include_directories(
 )
 add_dependencies(manager_device spdlog)
 add_dependencies(manager_device flatbuffer)
+target_link_options(manager_device PRIVATE "LINKER:-no-as-needed")
 target_link_libraries(manager_device
     iberty
     stdc++fs
