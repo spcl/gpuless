@@ -170,11 +170,8 @@ CudaTrace &getCudaTrace() {
 
       std::vector<std::string> files;
       string_split(std::string(elf_defs), ',', files);
-      for(auto& file : files) {
-        SPDLOG_INFO("Reading kernel data from {}", file);
-        if(!getCubinAnalyzerELF().loadAnalysisFromCache(file)) {
-          std::exit(EXIT_FAILURE);
-        }
+      if(!getCubinAnalyzerELF().analyze(files)) {
+        std::exit(EXIT_FAILURE);
       }
     }
 #else
@@ -430,7 +427,7 @@ cudaError_t cudaLaunchKernel(const void *func, dim3 gridDim, dim3 blockDim,
     std::vector<int> paramInfos;
     const auto &analyzer = getCubinAnalyzerELF();
     if (!analyzer.kernel_parameters(symbol, paramInfos)) {
-        EXIT_UNRECOVERABLE("unable to look up kernel parameter data");
+        EXIT_UNRECOVERABLE("unable to look up kernel parameter data for " + symbol);
     }
 
     std::vector<std::vector<uint8_t>> paramBuffers(paramInfos.size());
@@ -813,7 +810,8 @@ void *dlsym(void *handle, const char *symbol) {
 
     // early out if not a CUDA driver symbol
     if (strncmp(symbol, "cu", 2) != 0) {
-        return (real_dlsym(handle, symbol));
+        auto p = (real_dlsym(handle, symbol));
+        return p;
     }
 
     LINK_CU_FUNCTION_DLSYM(symbol, cuGetProcAddress);
