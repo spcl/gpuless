@@ -69,6 +69,7 @@ table FBCudaMemcpyAsyncH2D {
     src:uint64;
     size:uint64;
     stream:uint64;
+    mmap:string;
     buffer:[uint8];
 }
 
@@ -77,6 +78,7 @@ table FBCudaMemcpyAsyncD2H {
     src:uint64;
     size:uint64;
     stream:uint64;
+    mmap:string;
     buffer:[uint8];
 }
 

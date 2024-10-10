@@ -372,27 +372,57 @@ cudaError_t cudaMemcpyAsync(void *dst, const void *src, size_t count,
                             enum cudaMemcpyKind kind, cudaStream_t stream) {
     hijackInit();
     if (kind == cudaMemcpyHostToDevice) {
+
         SPDLOG_INFO(
             "{}() [cudaMemcpyHostToDevice, {} <- {}, stream={}, pid={}]",
             __func__, dst, src, reinterpret_cast<uint64_t>(stream), getpid());
-        auto rec =
-            std::make_shared<CudaMemcpyAsyncH2D>(dst, src, count, stream);
-        std::memcpy(rec->buffer.data(), src, count);
-        getCudaTrace().record(rec);
+
+        if(pool) {
+
+          auto chunk = pool->get();
+          auto rec = std::make_shared<CudaMemcpyAsyncH2D>(dst, src, count, stream, chunk.name);
+          std::memcpy(chunk.ptr, src, count);
+
+          getCudaTrace().record(rec);
+        } else {
+          auto rec = std::make_shared<CudaMemcpyAsyncH2D>(dst, src, count, stream);
+
+          // Host side - we copy the data for sending
+          std::memcpy(rec->buffer.data(), src, count);
+          getCudaTrace().record(rec);
+        }
+
+        getTraceExecutor()->send_only(getCudaTrace());
+
     } else if (kind == cudaMemcpyDeviceToHost) {
         SPDLOG_INFO(
             "{}() [cudaMemcpyDeviceToHost, {} <- {}, stream={}, pid={}]",
             __func__, dst, src, reinterpret_cast<uint64_t>(stream), getpid());
-        auto rec =
-            std::make_shared<CudaMemcpyAsyncD2H>(dst, src, count, stream);
-        getCudaTrace().record(rec);
-        getTraceExecutor()->synchronize(getCudaTrace());
 
-        std::shared_ptr<CudaMemcpyAsyncD2H> top =
-            (const std::shared_ptr<CudaMemcpyAsyncD2H> &)getCudaTrace()
-                .historyTop();
-        std::memcpy(dst, top->buffer.data(), count);
+        if(pool) {
+          auto chunk = pool->get();
+          auto rec = std::make_shared<CudaMemcpyAsyncD2H>(dst, src, count, stream, chunk.name);
+          getCudaTrace().record(rec);
+          getTraceExecutor()->synchronize(getCudaTrace());
 
+          // Host side - we copy the received data
+          std::memcpy(dst, chunk.ptr, count);
+
+          pool->give(chunk.name);
+
+        } else {
+
+          auto rec =
+              std::make_shared<CudaMemcpyAsyncD2H>(dst, src, count, stream);
+
+          getCudaTrace().record(rec);
+          getTraceExecutor()->synchronize(getCudaTrace());
+
+          std::shared_ptr<CudaMemcpyAsyncD2H> top =
+              (const std::shared_ptr<CudaMemcpyAsyncD2H> &)getCudaTrace()
+                  .historyTop();
+          std::memcpy(dst, top->buffer_ptr, count);
+        }
         //        auto *dstb = reinterpret_cast<uint8_t *>(dst);
         //        SPDLOG_DEBUG("cudaMemcpyAsyncD2H memory probe: {:x} {:x} {:x}
         //        {:x}",
