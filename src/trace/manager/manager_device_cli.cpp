@@ -23,14 +23,18 @@ int main(int argc, char **argv) {
 
     manage_device(device, port);
   } else {
-    if (argc != 6)
+    if (argc != 7)
       return 1;
 
     std::string app_name{argv[3]};
     std::string poll_type{argv[4]};
     const char* client_name{argv[5]};
+    bool use_vmm = false;
+    if(argc == 7) {
+      use_vmm = std::stoi(argv[6]);
+    }
 
-    manage_device_shmem(device, app_name, poll_type, client_name);
+    manage_device_shmem(device, app_name, poll_type, client_name, use_vmm);
   }
 
   return 0;

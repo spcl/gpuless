@@ -8,7 +8,6 @@
 #include <unistd.h>
 
 #include <cuda.h>
-#include <cuda_runtime_api.h>
 #include <spdlog/spdlog.h>
 
 #include <iceoryx_hoofs/cxx/string.hpp>
@@ -32,14 +31,6 @@ extern const int BACKLOG;
 static bool g_device_initialized = false;
 static int64_t g_sync_counter = 0;
 
-
-struct DataElement {
-    void* devicePtr;
-    void* hostPtr;
-    size_t size;
-};
-
-std::vector<DataElement> ptrSizeStore;
 
 static gpuless::CudaTrace &getCudaTrace() {
     static gpuless::CudaTrace cuda_trace;
@@ -90,24 +81,6 @@ flatbuffers::FlatBufferBuilder handle_attributes_request(
   SPDLOG_DEBUG("FBTraceAttributesResponse sent");
 
   return builder;
-}
-
-void add_to_mem_list(void* devicePtr, size_t size){
-    DataElement de;
-    de.devicePtr = devicePtr;
-    de.hostPtr = nullptr;
-    de.size = size;
-    ptrSizeStore.push_back(de);
-}
-
-void remove_from_mem_list(const void* ptrToRemove){
-    // Find and remove elements from ptrSizeStore where devicePtr equals ptrToRemove
-    for (auto it = ptrSizeStore.begin(); it != ptrSizeStore.end(); ++it) {
-        if (it->devicePtr == ptrToRemove) {
-            ptrSizeStore.erase(it);
-            break; // Exit loop after removing the first matching element
-        }
-    }
 }
 
 std::optional<flatbuffers::FlatBufferBuilder>
@@ -183,19 +156,6 @@ handle_execute_request(const gpuless::FBProtocolMessage *msg, int socket_fd) {
       if (err != 0) {
         SPDLOG_ERROR("Failed to execute call trace: {} ({})", apiCall->nativeErrorToString(err), err);
         std::exit(EXIT_FAILURE);
-      }
-
-      // if cudaMalloc & cudaFree executes correctly, add then to mem list
-      if (apiCall->typeName() == "CudaMalloc"){
-
-        if(auto* ptr = dynamic_cast<gpuless::CudaMalloc*>(apiCall.get())) {
-          add_to_mem_list(ptr->devPtr, ptr->size);
-        }
-      }
-      else if (apiCall->typeName() == "CudaFree") {
-        if(auto* ptr = dynamic_cast<gpuless::CudaFree*>(apiCall.get())) {
-          remove_from_mem_list(ptr->devPtr);
-        }
       }
 
       ++idx;
@@ -284,73 +244,6 @@ std::optional<flatbuffers::FlatBufferBuilder> finish_trace_execution(int last_id
   return builder;
 }
 
-void swap_in() {
-    // Number of streams to create
-    const int numStreams = 4;
-
-    // Array to store stream handles
-    cudaStream_t streams[numStreams];
-
-    // Create multiple streams
-    for (int i = 0; i < numStreams; ++i) {
-        cudaStreamCreate(&streams[i]);
-    }
-
-    // Reserve memory on device
-    int streamIdx = 0;
-    for (auto& buffer : ptrSizeStore) {
-        // allocate size
-        cudaMalloc(&buffer.devicePtr, buffer.size);
-        cudaMemcpyAsync(buffer.devicePtr, buffer.hostPtr, buffer.size, cudaMemcpyHostToDevice, streams[streamIdx % numStreams]); // hostPtr should be a pinned mem.
-        streamIdx += 1;
-    }
-
-    // Wait for transfers to complete
-    cudaDeviceSynchronize();
-
-    ptrSizeStore.clear();
-
-    // Destroy streams when no longer needed
-    for (int i = 0; i < numStreams; ++i) {
-        cudaStreamDestroy(streams[i]);
-    }
-}
-
-void swap_out() {
-    // Number of streams to create
-    const int numStreams = 4;
-
-    // Array to store stream handles
-    cudaStream_t streams[numStreams];
-
-    // Create multiple streams
-    for (int i = 0; i < numStreams; ++i) {
-        cudaStreamCreate(&streams[i]);
-    }
-
-    int streamIdx = 0;
-    for (auto& buffer : ptrSizeStore) {
-        void* tempVector;
-        cudaHostAlloc(&tempVector, buffer.size, cudaHostAllocDefault);
-        buffer.hostPtr = tempVector;
-        // Schedule transfers from device to host
-        cudaMemcpyAsync(buffer.hostPtr, buffer.devicePtr, buffer.size, cudaMemcpyDeviceToHost, streams[streamIdx % numStreams]);
-        streamIdx += 1;
-    }
-
-    // Wait for transfers to complete
-    cudaDeviceSynchronize();
-
-    // Delete all user buffers
-    for (const auto& buffer : ptrSizeStore) {
-        cudaFree(buffer.devicePtr);
-    }
-
-    // Destroy streams when no longer needed
-    for (int i = 0; i < numStreams; ++i) {
-        cudaStreamDestroy(streams[i]);
-    }
-}
 
 void handle_request(int socket_fd) {
     while (true) {
@@ -597,6 +490,7 @@ void ShmemServer::loop_wait(const char* user_name)
         }
 
         SPDLOG_INFO("Received {} requests", idx);
+        MemoryStore::get_instance().print_stats();
 
       } else {
 
@@ -717,7 +611,7 @@ void manage_device(const std::string& device, uint16_t port) {
 }
 
 void manage_device_shmem(const std::string &device, const std::string &app_name,
-                         const std::string &poll_type, const char* user_name)
+                         const std::string &poll_type, const char* user_name, bool use_vmm)
 {
 
   setenv("CUDA_VISIBLE_DEVICES", device.c_str(), 1);
@@ -725,6 +619,13 @@ void manage_device_shmem(const std::string &device, const std::string &app_name,
   ShmemServer shm_server;
 
   shm_server.setup(app_name);
+
+  if(use_vmm) {
+    spdlog::error("Enabling use of VMM-based allocations in CUDA!");
+    MemoryStore::get_instance().enable_vmm();
+  } else {
+    spdlog::error("Using traditional memory allocations in CUDA!");
+  }
 
   // initialize cuda device pre-emptively
   getCudaVirtualDevice().initRealDevice();
