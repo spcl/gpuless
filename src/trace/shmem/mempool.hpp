@@ -25,7 +25,11 @@ struct MemChunk {
     {
         //int fd = shm_open(name.c_str(), O_CREAT | O_EXCL | O_RDWR, 0600);
         int fd = shm_open(name.c_str(), O_CREAT | O_RDWR, 0600);
-        std::cerr << fd << " " << errno << std::endl;
+        if(fd == -1) {
+          spdlog::error("Fatal error in shm_open! {}", strerror(errno));
+          abort();
+        }
+
         int ret  = ftruncate(fd, CHUNK_SIZE);
         std::cerr << fd << " " << ret << " " << errno << std::endl;
 
