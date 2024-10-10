@@ -13,6 +13,8 @@
 #include <spdlog/spdlog.h>
 
 void manage_device(const std::string& device, uint16_t port);
+void swap_in();
+void swap_out();
 void manage_device_shmem(const std::string& device, const std::string& app_name, const std::string& poll_type, const char* user_name);
 
 struct SigHandler
