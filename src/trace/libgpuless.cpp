@@ -521,7 +521,7 @@ cudaError_t cudaStreamSynchronize(cudaStream_t stream) {
     hijackInit();
     HIJACK_FN_PROLOGUE();
     getCudaTrace().record(std::make_shared<CudaStreamSynchronize>(stream));
-    //getTraceExecutor()->synchronize(getCudaTrace());
+    getTraceExecutor()->synchronize(getCudaTrace());
     return cudaSuccess;
 }
 
