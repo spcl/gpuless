@@ -472,6 +472,7 @@ void ShmemServer::loop_wait(const char* user_name)
               ++idx;
               auto requestHeader = iox::popo::RequestHeader::fromPayload(requestPayload);
               SPDLOG_DEBUG("Received_request {} ", requestHeader->getSequenceId());
+              spdlog::error("Received_request {} ", requestHeader->getSequenceId());
               //spdlog::error("Received_request {} has blocked call {}", requestHeader->getSequenceId(), has_blocked_call);
               if(instance.can_exec() && !has_blocked_call) {
                 //has_blocked_call = !_process_client(requestPayload);
@@ -496,6 +497,8 @@ void ShmemServer::loop_wait(const char* user_name)
 
         auto val = orchestrator_recv.take();
 
+        static int count = 0;
+
         while(!val.has_error()) {
 
           int code = *val->get();
@@ -510,6 +513,21 @@ void ShmemServer::loop_wait(const char* user_name)
             instance.memcpy();
           } else if(code == static_cast<int>(GPUlessMessage::FULL_EXEC)) {
             instance.exec();
+            ++count;
+
+            if(count == 2) {
+              spdlog::error("Second invoc, let's do swap");
+
+              auto begin = std::chrono::high_resolution_clock::now();
+              MemoryStore::get_instance().swap_out();
+              auto end = std::chrono::high_resolution_clock::now();
+              spdlog::error("SwapOut {}", std::chrono::duration_cast<std::chrono::microseconds>(end-begin).count() / 1000.0);
+
+              begin = std::chrono::high_resolution_clock::now();
+              MemoryStore::get_instance().swap_in();
+              end = std::chrono::high_resolution_clock::now();
+              spdlog::error("SwapIn {}", std::chrono::duration_cast<std::chrono::microseconds>(end-begin).count() / 1000.0);
+            }
           }
 
           val = orchestrator_recv.take();
