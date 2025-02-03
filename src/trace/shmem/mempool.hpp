@@ -87,6 +87,7 @@ public:
 
         //auto ptr = mmap(NULL, MemChunk::CHUNK_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
         auto ptr = mmap(NULL, st.st_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+
         //std::cerr << "open " << name << " " << fd << " " << ptr << std::endl;
         used_chunks[name] = ptr;
         names.emplace_back(name);
