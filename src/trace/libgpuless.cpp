@@ -663,7 +663,8 @@ cudaError_t cudaOccupancyMaxActiveBlocksPerMultiprocessorWithFlags(
     unsigned int flags) {
     hijackInit();
     HIJACK_FN_PROLOGUE();
-    // TODO
+    // FIXME: add complete implementation. this is a conservative option
+    *numBlocks = 1;
     return cudaSuccess;
 }
 
