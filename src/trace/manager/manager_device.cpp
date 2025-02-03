@@ -515,20 +515,21 @@ void ShmemServer::loop_wait(const char* user_name)
             instance.exec();
             ++count;
 
-            if(count == 2) {
-              spdlog::error("Second invoc, let's do swap");
+            // Reenable this code for swapping benchmark
+            //if(count == 2) {
+            //  spdlog::error("Second invoc, let's do swap");
 
-              auto begin = std::chrono::high_resolution_clock::now();
-              MemoryStore::get_instance().swap_out();
-              auto end = std::chrono::high_resolution_clock::now();
-              spdlog::error("SwapOut {}", std::chrono::duration_cast<std::chrono::microseconds>(end-begin).count() / 1000.0);
+            //  auto begin = std::chrono::high_resolution_clock::now();
+            //  MemoryStore::get_instance().swap_out();
+            //  auto end = std::chrono::high_resolution_clock::now();
+            //  spdlog::error("SwapOut {}", std::chrono::duration_cast<std::chrono::microseconds>(end-begin).count() / 1000.0);
 
-              begin = std::chrono::high_resolution_clock::now();
-              MemoryStore::get_instance().swap_in();
-              end = std::chrono::high_resolution_clock::now();
-              spdlog::error("SwapIn {}", std::chrono::duration_cast<std::chrono::microseconds>(end-begin).count() / 1000.0);
-              MemoryStore::get_instance().print_stats();
-            }
+            //  begin = std::chrono::high_resolution_clock::now();
+            //  MemoryStore::get_instance().swap_in();
+            //  end = std::chrono::high_resolution_clock::now();
+            //  spdlog::error("SwapIn {}", std::chrono::duration_cast<std::chrono::microseconds>(end-begin).count() / 1000.0);
+            //  MemoryStore::get_instance().print_stats();
+            //}
           }
 
           val = orchestrator_recv.take();
