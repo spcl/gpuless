@@ -143,8 +143,8 @@ struct ShmemServer {
   void* take();
   void release(void*);
 
-  void _process_client(const void* payload);
-  void _process_remainder();
+  bool _process_client(const void* payload);
+  bool _process_remainder();
   double _sum = 0;
 
   std::optional<iox::posix::SignalGuard> sigint;

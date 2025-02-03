@@ -1,4 +1,5 @@
 #include <iostream>
+#include <utility>
 #include <vector>
 
 #include <arpa/inet.h>
@@ -120,14 +121,21 @@ handle_execute_request(const gpuless::FBProtocolMessage *msg, int socket_fd) {
     SPDLOG_INFO("Execution trace of size {}", call_stack.size());
 
     auto& instance = ExecutionStatus::instance();
-    auto& callstack = cuda_trace.callStack();
+    auto [begin, end] = cuda_trace.callStack();
 
-    for(size_t idx = 0; idx < callstack.size(); ++idx)
+    //SPDLOG_DEBUG("Execute callstack of size {} ", callstack.size());
+
+    //for(size_t idx = 0; idx < callstack.size(); ++idx)
+    int idx = 0; 
+    for(; begin != end; ++begin)
     {
-      auto &apiCall = callstack[idx];
+      //auto &apiCall = callstack[idx];
+      auto &apiCall = *begin;
+
+      SPDLOG_DEBUG("Callstack pos {}, is memop {} ", idx, apiCall->is_memop());
 
       if(apiCall->is_memop() && !instance.can_memcpy()) {
-        spdlog::error("Blocking memory operation!");
+        spdlog::error("Blocking memory operation! Saving position {} from {}", idx, cuda_trace.sizeCallStack());
 
         instance.save(idx);
 
@@ -135,7 +143,7 @@ handle_execute_request(const gpuless::FBProtocolMessage *msg, int socket_fd) {
       }
 
       if(apiCall->is_kernel() && !instance.can_exec_kernels()) {
-        spdlog::error("Blocking kernel execution!");
+        spdlog::error("Blocking kernel execution! Saving position {} from {}", idx, cuda_trace.sizeCallStack());
 
         instance.save(idx);
 
@@ -148,6 +156,8 @@ handle_execute_request(const gpuless::FBProtocolMessage *msg, int socket_fd) {
         SPDLOG_ERROR("Failed to execute call trace: {} ({})", apiCall->nativeErrorToString(err), err);
         std::exit(EXIT_FAILURE);
       }
+
+      ++idx;
     }
 
     cuda_trace.markSynchronized();
@@ -179,13 +189,19 @@ std::optional<flatbuffers::FlatBufferBuilder> finish_trace_execution(int last_id
   auto &vdev = getCudaVirtualDevice();
 
   auto& instance = ExecutionStatus::instance();
-  auto& callstack = cuda_trace.callStack();
-  for(size_t idx = last_idx; idx < callstack.size(); ++idx)
+  //auto& callstack = cuda_trace.callStack();
+  auto [begin, end] = cuda_trace.callStack();
+  spdlog::error("Finishing trace execution from position {} from {}, {}", last_idx, cuda_trace.sizeCallStack(), std::distance(begin, end));
+  std::advance(begin, last_idx);
+  size_t idx = 0;
+  //for(size_t idx = last_idx; idx < callstack.size(); ++idx)
+  for(; begin != end; ++begin)
   {
-    auto &apiCall = callstack[idx];
+    //auto &apiCall = callstack[idx];
+    auto &apiCall = *begin;
 
     if(apiCall->is_memop() && !instance.can_memcpy()) {
-      spdlog::error("Blocking memory operation!");
+      spdlog::error("Blocking memory operation! Saving position {} from {}", idx, cuda_trace.sizeCallStack());
 
       instance.save(idx);
 
@@ -193,7 +209,7 @@ std::optional<flatbuffers::FlatBufferBuilder> finish_trace_execution(int last_id
     }
 
     if(apiCall->is_kernel() && !instance.can_exec_kernels()) {
-      spdlog::error("Blocking kernel execution!");
+      spdlog::error("Blocking kernel execution! Saving position {} from {}", idx, cuda_trace.sizeCallStack());
 
       instance.save(idx);
 
@@ -264,7 +280,7 @@ void *ShmemServer::take() {
 
 void ShmemServer::release(void *ptr) { this->server->releaseRequest(ptr); }
 
-void ShmemServer::_process_remainder()
+bool ShmemServer::_process_remainder()
 {
   auto& instance = ExecutionStatus::instance();
   std::optional<flatbuffers::FlatBufferBuilder> builder = finish_trace_execution(instance.load());
@@ -291,10 +307,14 @@ void ShmemServer::_process_remainder()
         });
 
     server->releaseRequest(requestPayload);
+
+    return true;
+  } else {
+    return false;
   }
 }
 
-void ShmemServer::_process_client(const void *requestPayload) {
+bool ShmemServer::_process_client(const void *requestPayload) {
   // auto request = static_cast<const AddRequest*>(requestPayload);
   // std::cout << APP_NAME << " Got Request: " << request->augend << " + " <<
   // request->addend << std::endl;
@@ -325,7 +345,7 @@ void ShmemServer::_process_client(const void *requestPayload) {
     builder = handle_attributes_request(msg, -1);
   } else {
     SPDLOG_ERROR("Invalid request type");
-    return;
+    return false;
   }
   // auto e = std::chrono::high_resolution_clock::now();
   // auto d =
@@ -348,6 +368,9 @@ void ShmemServer::_process_client(const void *requestPayload) {
           // response->sum = request->augend + request->addend;
           // std::cout << APP_NAME << " Send Response: " << response->sum <<
           // std::endl;
+
+          auto requestHeader = iox::popo::RequestHeader::fromPayload(requestPayload);
+          SPDLOG_DEBUG("Reply_request {}", requestHeader->getSequenceId());
           server->send(responsePayload).or_else([&](auto &error) {
             std::cout << "Could not send Response! Error: " << error << std::endl;
           });
@@ -358,10 +381,15 @@ void ShmemServer::_process_client(const void *requestPayload) {
         });
 
     server->releaseRequest(requestPayload);
+
+    return true;
   } else {
 
     ExecutionStatus::instance().save_payload(requestPayload);
+
+    return false;
   }
+
 }
 
 iox::popo::WaitSet<>* SigHandler::waitset_ptr;
@@ -418,54 +446,93 @@ void ShmemServer::loop_wait(const char* user_name)
     }
   );
 
+  std::queue<const void*> pendingPayload;
+  bool has_blocked_call = false;
+  auto& instance = ExecutionStatus::instance();
+
   while (!SigHandler::quit) {
 
     auto notificationVector = waitset.wait();
-
-    auto& instance = ExecutionStatus::instance();
-    const void* pendingPayload = nullptr;
+    //const void* pendingPayload = nullptr;
 
     for (auto &notification : notificationVector) {
 
       if (notification->doesOriginateFrom(server.get())) {
 
-        server->take().and_then(
-          [&](auto &requestPayload) {
+        bool no_more = false;
 
-            if(instance.can_exec()) {
-              _process_client(requestPayload);
-            } else {
-              pendingPayload = requestPayload;
+        int idx = 0;
+        while(!no_more) {
+
+          server->take().and_then(
+            [&](auto &requestPayload) mutable {
+
+              ++idx;
+              auto requestHeader = iox::popo::RequestHeader::fromPayload(requestPayload);
+              SPDLOG_DEBUG("Received_request {} ", requestHeader->getSequenceId());
+              //spdlog::error("Received_request {} has blocked call {}", requestHeader->getSequenceId(), has_blocked_call);
+              if(instance.can_exec() && !has_blocked_call) {
+                //has_blocked_call = !_process_client(requestPayload);
+                has_blocked_call = !_process_client(requestPayload);
+              } else {
+                //pendingPayload = requestPayload;
+                //spdlog::error("Executor is blocked, appending payload");
+                pendingPayload.push(requestPayload);
+              }
             }
-          }
-        );
+          ).or_else(
+            [&](auto& res) {
+              no_more = true;
+            }
+          );
+        }
+
+        SPDLOG_INFO("Received {} requests", idx);
 
       } else {
 
-        int code = *orchestrator_recv.take()->get();
-        spdlog::error("Message from the orchestrator! Code {}", code);
+        auto val = orchestrator_recv.take();
 
-        auto& instance = ExecutionStatus::instance();
-        if(code == static_cast<int>(GPUlessMessage::LOCK_DEVICE)) {
-          instance.lock();
-        } else if(code == static_cast<int>(GPUlessMessage::BASIC_EXEC)) {
-          instance.basic_exec();
-        } else if(code == static_cast<int>(GPUlessMessage::MEMCPY_ONLY)) {
-          instance.memcpy();
-        } else if(code == static_cast<int>(GPUlessMessage::FULL_EXEC)) {
-          instance.exec();
+        while(!val.has_error()) {
+
+          int code = *val->get();
+          spdlog::error("Message from the orchestrator! Code {}", code);
+
+          auto& instance = ExecutionStatus::instance();
+          if(code == static_cast<int>(GPUlessMessage::LOCK_DEVICE)) {
+            instance.lock();
+          } else if(code == static_cast<int>(GPUlessMessage::BASIC_EXEC)) {
+            instance.basic_exec();
+          } else if(code == static_cast<int>(GPUlessMessage::MEMCPY_ONLY)) {
+            instance.memcpy();
+          } else if(code == static_cast<int>(GPUlessMessage::FULL_EXEC)) {
+            instance.exec();
+          }
+
+          val = orchestrator_recv.take();
         }
 
-        // Check if there is anything to start
-        if(pendingPayload && instance.can_exec()) {
-          spdlog::error("Process pending payload!");
-          _process_client(pendingPayload);
-          pendingPayload = nullptr;
-        }
+        //spdlog::error("Has pending payload? {}", pendingPayload != nullptr);
 
+        //spdlog::error("Has unfinished trace? {}", instance.has_unfinished_trace());
         if(instance.has_unfinished_trace()) {
-          spdlog::error("Process unfinished trace from pos {}", instance.load());
-          _process_remainder();
+          //spdlog::error("Process unfinished trace from pos {}", instance.load());
+          has_blocked_call = !_process_remainder();
+        }
+
+        //spdlog::error("Has pending payload? {}", !pendingPayload.empty());
+        // Check if there is anything to start
+        if(!pendingPayload.empty() && instance.can_exec()) {
+
+          while(!pendingPayload.empty() && !has_blocked_call) {
+
+            //spdlog::error("Process pending payload!");
+            auto payload = pendingPayload.front();
+            pendingPayload.pop();
+            has_blocked_call = !_process_client(payload);
+            //pendingPayload = nullptr;
+
+          }
         }
 
       }

@@ -4,6 +4,7 @@
 #include "../TcpClient.hpp"
 #include "tcp_gpu_session.hpp"
 #include "trace_executor.hpp"
+#include <stdexcept>
 
 namespace gpuless {
 
@@ -29,6 +30,7 @@ class TraceExecutorTcp : public TraceExecutor {
             manager::instance_profile profile) override;
     bool synchronize(gpuless::CudaTrace &cuda_trace) override;
     bool deallocate() override;
+    bool send_only(gpuless::CudaTrace &cuda_trace) override { throw std::runtime_error("unimplemented"); }
 
     double getSynchronizeTotalTime() const override;
 };

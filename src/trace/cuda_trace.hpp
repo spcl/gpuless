@@ -27,12 +27,20 @@ class CudaTrace {
     std::map<uint64_t, std::tuple<void *, uint64_t, bool>>
         module_id_to_fatbin_resource_;
 
+    size_t already_sent = 0;
+
   public:
+
+    typedef std::vector<std::shared_ptr<AbstractCudaApiCall>>::iterator it_t;
+
     CudaTrace();
 
     const std::shared_ptr<AbstractCudaApiCall> &historyTop();
     void setHistoryTop(std::shared_ptr<AbstractCudaApiCall> top);
-    std::vector<std::shared_ptr<AbstractCudaApiCall>>& callStack();
+    //std::vector<std::shared_ptr<AbstractCudaApiCall>>& callStack();
+    std::tuple<it_t, it_t> callStack();
+    std::tuple<it_t, it_t> fullCallStack();
+    size_t sizeCallStack();
 
     std::map<std::string, std::pair<uint64_t, bool>> &getSymbolToModuleId();
     std::map<uint64_t, std::tuple<void *, uint64_t, bool>> &
@@ -46,7 +54,9 @@ class CudaTrace {
     void recordGlobalVarMapEntry(std::string &symbol, uint64_t module_id);
 
     void record(const std::shared_ptr<AbstractCudaApiCall> &cudaApiCall);
-    void markSynchronized();
+    void markSynchronized(int64_t positions = -1);
+
+    void markSent();
 };
 
 } // namespace gpuless

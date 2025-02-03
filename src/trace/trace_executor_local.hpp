@@ -29,6 +29,7 @@ class TraceExecutorLocal final : public TraceExecutor {
               manager::instance_profile profile);
     bool synchronize(gpuless::CudaTrace &cuda_trace);
     bool deallocate();
+    bool send_only(gpuless::CudaTrace &cuda_trace) override { throw std::runtime_error("unimplemented"); }
 };
 
 } // namespace gpuless

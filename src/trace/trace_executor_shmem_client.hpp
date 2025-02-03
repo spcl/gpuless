@@ -28,6 +28,9 @@ class TraceExecutorShmem : public TraceExecutor {
 
     bool wait_poll;
 
+    int64_t last_sent = 0;
+    int64_t last_synchronized = 0;
+
   private:
     bool negotiateSession(manager::instance_profile profile);
     bool getDeviceAttributes();
@@ -44,6 +47,7 @@ class TraceExecutorShmem : public TraceExecutor {
     bool init(const char *ip, short port,
               manager::instance_profile profile) override;
     bool synchronize(gpuless::CudaTrace &cuda_trace) override;
+    bool send_only(gpuless::CudaTrace &cuda_trace) override;
     bool deallocate() override;
 
     double getSynchronizeTotalTime() const override;
