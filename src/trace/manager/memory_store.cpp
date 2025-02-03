@@ -83,7 +83,7 @@ void MemoryStore::print_stats()
     if(buffer.size < 2*1024*1024)
       size2 += buffer.size;
   }
-  spdlog::error("Total size {} {}", size, size2);
+  spdlog::error("Total size {} {}", size/1024.0/1024.0, size2);
 }
 
 void MemoryStore::swap_in()

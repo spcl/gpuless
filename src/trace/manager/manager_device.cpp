@@ -472,7 +472,7 @@ void ShmemServer::loop_wait(const char* user_name)
               ++idx;
               auto requestHeader = iox::popo::RequestHeader::fromPayload(requestPayload);
               SPDLOG_DEBUG("Received_request {} ", requestHeader->getSequenceId());
-              spdlog::error("Received_request {} ", requestHeader->getSequenceId());
+              //spdlog::error("Received_request {} ", requestHeader->getSequenceId());
               //spdlog::error("Received_request {} has blocked call {}", requestHeader->getSequenceId(), has_blocked_call);
               if(instance.can_exec() && !has_blocked_call) {
                 //has_blocked_call = !_process_client(requestPayload);
@@ -527,6 +527,7 @@ void ShmemServer::loop_wait(const char* user_name)
               MemoryStore::get_instance().swap_in();
               end = std::chrono::high_resolution_clock::now();
               spdlog::error("SwapIn {}", std::chrono::duration_cast<std::chrono::microseconds>(end-begin).count() / 1000.0);
+              MemoryStore::get_instance().print_stats();
             }
           }
 
