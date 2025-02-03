@@ -31,23 +31,23 @@ struct MemChunk {
         }
 
         int ret  = ftruncate(fd, CHUNK_SIZE);
-        std::cerr << fd << " " << ret << " " << errno << std::endl;
+        //std::cerr << fd << " " << ret << " " << errno << std::endl;
 
         ptr = mmap(NULL, CHUNK_SIZE, PROT_READ | PROT_WRITE,
                     MAP_SHARED, fd, 0);
-        std::cerr << "allocate " << name << " " << CHUNK_SIZE << " " << reinterpret_cast<std::uintptr_t>(ptr) << std::endl;
+        //std::cerr << "allocate " << name << " " << CHUNK_SIZE << " " << reinterpret_cast<std::uintptr_t>(ptr) << std::endl;
     }
 
     void open()
     {
-        std::cerr << "open " << name << std::endl;
+        //std::cerr << "open " << name << std::endl;
         int fd = shm_open(name.c_str(), O_RDWR, 0);
         ptr = mmap(NULL, CHUNK_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     }
 
     void close()
     {
-        std::cerr << "Close " << name << std::endl;
+        //std::cerr << "Close " << name << std::endl;
         munmap(ptr, CHUNK_SIZE);
         //shm_unlink(name.c_str());
     }
@@ -66,7 +66,7 @@ public:
 
         int fd = shm_open(name.c_str(), O_RDWR, 0);
         auto ptr = mmap(NULL, MemChunk::CHUNK_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-        std::cerr << "open " << name << " " << fd << " " << ptr << std::endl;
+        //std::cerr << "open " << name << " " << fd << " " << ptr << std::endl;
         used_chunks[name] = ptr;
         names.emplace_back(name);
         return ptr;
