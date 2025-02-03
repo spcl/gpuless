@@ -75,6 +75,7 @@ add_custom_target(
 add_executable(manager_trace
     src/trace/manager/manager.cpp
     src/trace/manager/manager_device.cpp
+    src/trace/manager/memory_store.cpp
     src/trace/cuda_trace.cpp
     src/trace/cuda_trace_converter.cpp
     src/trace/cuda_api_calls.cpp
@@ -114,6 +115,7 @@ endif()
 add_executable(manager_device
     src/trace/manager/manager_device_cli.cpp
     src/trace/manager/manager_device.cpp
+    src/trace/manager/memory_store.cpp
     src/trace/cuda_trace.cpp
     src/trace/cuda_trace_converter.cpp
     src/trace/cuda_api_calls.cpp
@@ -189,6 +191,7 @@ add_library(gpuless SHARED
     src/trace/trace_executor_tcp_client.cpp
     src/trace/trace_executor_shmem_client.cpp
     src/trace/dlsym_util.cpp
+    src/trace/manager/memory_store.cpp
     src/TcpClient.cpp
     src/utils.cpp
     src/trace/cubin_analysis.cpp)

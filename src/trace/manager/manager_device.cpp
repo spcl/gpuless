@@ -19,12 +19,12 @@
 #include "../../utils.hpp"
 #include "../cuda_trace.hpp"
 #include "../cuda_trace_converter.hpp"
+#include "../shmem/mempool.hpp"
 #include "flatbuffers/flatbuffers.h"
 #include "iceoryx_posh/internal/popo/base_subscriber.hpp"
 #include "iceoryx_posh/popo/publisher.hpp"
 #include "iceoryx_posh/popo/subscriber.hpp"
 #include "manager_device.hpp"
-#include "../shmem/mempool.hpp"
 
 extern const int BACKLOG;
 
@@ -32,23 +32,22 @@ static bool g_device_initialized = false;
 static int64_t g_sync_counter = 0;
 
 static gpuless::CudaTrace &getCudaTrace() {
-    static gpuless::CudaTrace cuda_trace;
-    return cuda_trace;
+  static gpuless::CudaTrace cuda_trace;
+  return cuda_trace;
 }
 
 static CudaVirtualDevice &getCudaVirtualDevice() {
-    static CudaVirtualDevice cuda_virtual_device;
+  static CudaVirtualDevice cuda_virtual_device;
   if (!g_device_initialized) {
     g_device_initialized = true;
     cuda_virtual_device.initRealDevice();
   }
-    return cuda_virtual_device;
+  return cuda_virtual_device;
 }
 
-flatbuffers::FlatBufferBuilder handle_attributes_request(
-  const gpuless::FBProtocolMessage *msg, int socket_fd
-)
-{
+flatbuffers::FlatBufferBuilder
+handle_attributes_request(const gpuless::FBProtocolMessage *msg,
+                          int socket_fd) {
   SPDLOG_INFO("Handling device attributes request");
 
   auto &vdev = getCudaVirtualDevice();
@@ -58,19 +57,16 @@ flatbuffers::FlatBufferBuilder handle_attributes_request(
   for (unsigned a = 0; a < vdev.device_attributes.size(); a++) {
 
     auto fb_attr = CreateCUdeviceAttributeValue(
-      builder, static_cast<CUdeviceAttribute>(a), vdev.device_attributes[a]
-    );
+        builder, static_cast<CUdeviceAttribute>(a), vdev.device_attributes[a]);
     attrs_vec.push_back(fb_attr);
   }
 
   auto attrs = gpuless::CreateFBTraceAttributeResponse(
-    builder, gpuless::FBStatus_OK, vdev.device_total_mem,
-    builder.CreateVector(attrs_vec)
-  );
+      builder, gpuless::FBStatus_OK, vdev.device_total_mem,
+      builder.CreateVector(attrs_vec));
 
   auto response = gpuless::CreateFBProtocolMessage(
-    builder, gpuless::FBMessage_FBTraceAttributeResponse, attrs.Union()
-  );
+      builder, gpuless::FBMessage_FBTraceAttributeResponse, attrs.Union());
   builder.Finish(response);
 
   if (socket_fd >= 0) {
@@ -85,131 +81,66 @@ flatbuffers::FlatBufferBuilder handle_attributes_request(
 std::optional<flatbuffers::FlatBufferBuilder>
 handle_execute_request(const gpuless::FBProtocolMessage *msg, int socket_fd) {
 
-    SPDLOG_INFO("Handling trace execution request");
-    auto &cuda_trace = getCudaTrace();
-    auto &vdev = getCudaVirtualDevice();
-
-    // load new modules
-    auto new_modules = msg->message_as_FBTraceExecRequest()->new_modules();
-    SPDLOG_INFO("Loading {} new modules", new_modules->size());
-    for (const auto &m : *new_modules) {
-        CUmodule mod;
-        checkCudaErrors(cuModuleLoadData(&mod, m->buffer()->data()));
-        vdev.module_registry_.emplace(m->module_id(), mod);
-        SPDLOG_DEBUG("Loaded module {}", m->module_id());
-    }
-
-    // load new functions
-    auto new_functions = msg->message_as_FBTraceExecRequest()->new_functions();
-    SPDLOG_INFO("Loading {} new functions", new_functions->size());
-    for (const auto &m : *new_functions) {
-        auto mod_reg_it = vdev.module_registry_.find(m->module_id());
-        if (mod_reg_it == vdev.module_registry_.end()) {
-            SPDLOG_ERROR("Module {} not in registry", m->module_id());
-        }
-        CUmodule mod = mod_reg_it->second;
-        CUfunction func;
-        checkCudaErrors(cuModuleGetFunction(&func, mod, m->symbol()->c_str()));
-        vdev.function_registry_.emplace(m->symbol()->str(), func);
-        SPDLOG_DEBUG("Function loaded: {}", m->symbol()->str());
-    }
-
-    // execute CUDA api calls
-    auto p = msg->message_as_FBTraceExecRequest();
-    auto call_stack = gpuless::CudaTraceConverter::execRequestToTrace(p);
-    cuda_trace.setCallStack(call_stack);
-    SPDLOG_INFO("Execution trace of size {}", call_stack.size());
-
-    auto& instance = ExecutionStatus::instance();
-    auto [begin, end] = cuda_trace.callStack();
-
-    //SPDLOG_DEBUG("Execute callstack of size {} ", callstack.size());
-
-    //for(size_t idx = 0; idx < callstack.size(); ++idx)
-    int idx = 0; 
-    for(; begin != end; ++begin)
-    {
-      //auto &apiCall = callstack[idx];
-      auto &apiCall = *begin;
-
-      SPDLOG_DEBUG("Callstack pos {}, is memop {} ", idx, apiCall->is_memop());
-
-      if(apiCall->is_memop() && !instance.can_memcpy()) {
-        spdlog::error("Blocking memory operation! Saving position {} from {}", idx, cuda_trace.sizeCallStack());
-
-        instance.save(idx);
-
-        return std::optional<flatbuffers::FlatBufferBuilder>{};
-      }
-
-      if(apiCall->is_kernel() && !instance.can_exec_kernels()) {
-        spdlog::error("Blocking kernel execution! Saving position {} from {}", idx, cuda_trace.sizeCallStack());
-
-        instance.save(idx);
-
-        return std::optional<flatbuffers::FlatBufferBuilder>{};
-      }
-
-      SPDLOG_DEBUG("Executing: {}", apiCall->typeName());
-      uint64_t err = apiCall->executeNative(vdev);
-      if (err != 0) {
-        SPDLOG_ERROR("Failed to execute call trace: {} ({})", apiCall->nativeErrorToString(err), err);
-        std::exit(EXIT_FAILURE);
-      }
-
-      ++idx;
-    }
-
-    cuda_trace.markSynchronized();
-    g_sync_counter++;
-    SPDLOG_INFO("Number of synchronizations: {}", g_sync_counter);
-
-    flatbuffers::FlatBufferBuilder builder;
-    auto top = cuda_trace.historyTop()->fbSerialize(builder);
-
-    auto fb_trace_exec_response =
-        gpuless::CreateFBTraceExecResponse(builder, gpuless::FBStatus_OK, top);
-    auto fb_protocol_message = gpuless::CreateFBProtocolMessage(
-        builder, gpuless::FBMessage_FBTraceExecResponse,
-        fb_trace_exec_response.Union());
-    builder.Finish(fb_protocol_message);
-
-    instance.save(-1);
-
-    if(socket_fd >= 0) {
-      send_buffer(socket_fd, builder.GetBufferPointer(), builder.GetSize());
-    }
-
-    return builder;
-}
-
-std::optional<flatbuffers::FlatBufferBuilder> finish_trace_execution(int last_idx)
-{
+  SPDLOG_INFO("Handling trace execution request");
   auto &cuda_trace = getCudaTrace();
   auto &vdev = getCudaVirtualDevice();
 
-  auto& instance = ExecutionStatus::instance();
-  //auto& callstack = cuda_trace.callStack();
+  // load new modules
+  auto new_modules = msg->message_as_FBTraceExecRequest()->new_modules();
+  SPDLOG_INFO("Loading {} new modules", new_modules->size());
+  for (const auto &m : *new_modules) {
+    CUmodule mod;
+    checkCudaErrors(cuModuleLoadData(&mod, m->buffer()->data()));
+    vdev.module_registry_.emplace(m->module_id(), mod);
+    SPDLOG_DEBUG("Loaded module {}", m->module_id());
+  }
+
+  // load new functions
+  auto new_functions = msg->message_as_FBTraceExecRequest()->new_functions();
+  SPDLOG_INFO("Loading {} new functions", new_functions->size());
+  for (const auto &m : *new_functions) {
+    auto mod_reg_it = vdev.module_registry_.find(m->module_id());
+    if (mod_reg_it == vdev.module_registry_.end()) {
+      SPDLOG_ERROR("Module {} not in registry", m->module_id());
+    }
+    CUmodule mod = mod_reg_it->second;
+    CUfunction func;
+    checkCudaErrors(cuModuleGetFunction(&func, mod, m->symbol()->c_str()));
+    vdev.function_registry_.emplace(m->symbol()->str(), func);
+    SPDLOG_DEBUG("Function loaded: {}", m->symbol()->str());
+  }
+
+  // execute CUDA api calls
+  auto p = msg->message_as_FBTraceExecRequest();
+  auto call_stack = gpuless::CudaTraceConverter::execRequestToTrace(p);
+  cuda_trace.setCallStack(call_stack);
+  SPDLOG_INFO("Execution trace of size {}", call_stack.size());
+
+  auto &instance = ExecutionStatus::instance();
   auto [begin, end] = cuda_trace.callStack();
-  spdlog::error("Finishing trace execution from position {} from {}, {}", last_idx, cuda_trace.sizeCallStack(), std::distance(begin, end));
-  std::advance(begin, last_idx);
-  size_t idx = 0;
-  //for(size_t idx = last_idx; idx < callstack.size(); ++idx)
-  for(; begin != end; ++begin)
-  {
-    //auto &apiCall = callstack[idx];
+
+  // SPDLOG_DEBUG("Execute callstack of size {} ", callstack.size());
+
+  // for(size_t idx = 0; idx < callstack.size(); ++idx)
+  int idx = 0;
+  for (; begin != end; ++begin) {
+    // auto &apiCall = callstack[idx];
     auto &apiCall = *begin;
 
-    if(apiCall->is_memop() && !instance.can_memcpy()) {
-      spdlog::error("Blocking memory operation! Saving position {} from {}", idx, cuda_trace.sizeCallStack());
+    SPDLOG_DEBUG("Callstack pos {}, is memop {} ", idx, apiCall->is_memop());
+
+    if (apiCall->is_memop() && !instance.can_memcpy()) {
+      spdlog::error("Blocking memory operation! Saving position {} from {}",
+                    idx, cuda_trace.sizeCallStack());
 
       instance.save(idx);
 
       return std::optional<flatbuffers::FlatBufferBuilder>{};
     }
 
-    if(apiCall->is_kernel() && !instance.can_exec_kernels()) {
-      spdlog::error("Blocking kernel execution! Saving position {} from {}", idx, cuda_trace.sizeCallStack());
+    if (apiCall->is_kernel() && !instance.can_exec_kernels()) {
+      spdlog::error("Blocking kernel execution! Saving position {} from {}",
+                    idx, cuda_trace.sizeCallStack());
 
       instance.save(idx);
 
@@ -219,7 +150,78 @@ std::optional<flatbuffers::FlatBufferBuilder> finish_trace_execution(int last_id
     SPDLOG_DEBUG("Executing: {}", apiCall->typeName());
     uint64_t err = apiCall->executeNative(vdev);
     if (err != 0) {
-      SPDLOG_ERROR("Failed to execute call trace: {} ({})", apiCall->nativeErrorToString(err), err);
+      SPDLOG_ERROR("Failed to execute call trace: {} ({})",
+                   apiCall->nativeErrorToString(err), err);
+      std::exit(EXIT_FAILURE);
+    }
+
+    ++idx;
+  }
+
+  cuda_trace.markSynchronized();
+  g_sync_counter++;
+  SPDLOG_INFO("Number of synchronizations: {}", g_sync_counter);
+
+  flatbuffers::FlatBufferBuilder builder;
+  auto top = cuda_trace.historyTop()->fbSerialize(builder);
+
+  auto fb_trace_exec_response =
+      gpuless::CreateFBTraceExecResponse(builder, gpuless::FBStatus_OK, top);
+  auto fb_protocol_message = gpuless::CreateFBProtocolMessage(
+      builder, gpuless::FBMessage_FBTraceExecResponse,
+      fb_trace_exec_response.Union());
+  builder.Finish(fb_protocol_message);
+
+  instance.save(-1);
+
+  if (socket_fd >= 0) {
+    send_buffer(socket_fd, builder.GetBufferPointer(), builder.GetSize());
+  }
+
+  return builder;
+}
+
+std::optional<flatbuffers::FlatBufferBuilder>
+finish_trace_execution(int last_idx) {
+  auto &cuda_trace = getCudaTrace();
+  auto &vdev = getCudaVirtualDevice();
+
+  auto &instance = ExecutionStatus::instance();
+  // auto& callstack = cuda_trace.callStack();
+  auto [begin, end] = cuda_trace.callStack();
+  spdlog::error("Finishing trace execution from position {} from {}, {}",
+                last_idx, cuda_trace.sizeCallStack(),
+                std::distance(begin, end));
+  std::advance(begin, last_idx);
+  size_t idx = 0;
+  // for(size_t idx = last_idx; idx < callstack.size(); ++idx)
+  for (; begin != end; ++begin) {
+    // auto &apiCall = callstack[idx];
+    auto &apiCall = *begin;
+
+    if (apiCall->is_memop() && !instance.can_memcpy()) {
+      spdlog::error("Blocking memory operation! Saving position {} from {}",
+                    idx, cuda_trace.sizeCallStack());
+
+      instance.save(idx);
+
+      return std::optional<flatbuffers::FlatBufferBuilder>{};
+    }
+
+    if (apiCall->is_kernel() && !instance.can_exec_kernels()) {
+      spdlog::error("Blocking kernel execution! Saving position {} from {}",
+                    idx, cuda_trace.sizeCallStack());
+
+      instance.save(idx);
+
+      return std::optional<flatbuffers::FlatBufferBuilder>{};
+    }
+
+    SPDLOG_DEBUG("Executing: {}", apiCall->typeName());
+    uint64_t err = apiCall->executeNative(vdev);
+    if (err != 0) {
+      SPDLOG_ERROR("Failed to execute call trace: {} ({})",
+                   apiCall->nativeErrorToString(err), err);
       std::exit(EXIT_FAILURE);
     }
   }
@@ -244,23 +246,23 @@ std::optional<flatbuffers::FlatBufferBuilder> finish_trace_execution(int last_id
 }
 
 void handle_request(int socket_fd) {
-    while (true) {
-        std::vector<uint8_t> buffer = recv_buffer(socket_fd);
-        if (buffer.size() == 0) {
-            break;
-        }
+  while (true) {
+    std::vector<uint8_t> buffer = recv_buffer(socket_fd);
+    if (buffer.size() == 0) {
+      break;
+    }
 
-        auto msg = gpuless::GetFBProtocolMessage(buffer.data());
+    auto msg = gpuless::GetFBProtocolMessage(buffer.data());
 
-        if (msg->message_type() == gpuless::FBMessage_FBTraceExecRequest) {
-            handle_execute_request(msg, socket_fd);
-        } else if (msg->message_type() ==
-                   gpuless::FBMessage_FBTraceAttributeRequest) {
-            handle_attributes_request(msg, socket_fd);
-        } else {
-            SPDLOG_ERROR("Invalid request type");
-            return;
-        }
+    if (msg->message_type() == gpuless::FBMessage_FBTraceExecRequest) {
+      handle_execute_request(msg, socket_fd);
+    } else if (msg->message_type() ==
+               gpuless::FBMessage_FBTraceAttributeRequest) {
+      handle_attributes_request(msg, socket_fd);
+    } else {
+      SPDLOG_ERROR("Invalid request type");
+      return;
+    }
   }
 }
 
@@ -280,25 +282,27 @@ void *ShmemServer::take() {
 
 void ShmemServer::release(void *ptr) { this->server->releaseRequest(ptr); }
 
-bool ShmemServer::_process_remainder()
-{
-  auto& instance = ExecutionStatus::instance();
-  std::optional<flatbuffers::FlatBufferBuilder> builder = finish_trace_execution(instance.load());
+bool ShmemServer::_process_remainder() {
+  auto &instance = ExecutionStatus::instance();
+  std::optional<flatbuffers::FlatBufferBuilder> builder =
+      finish_trace_execution(instance.load());
 
-  if(builder.has_value()) {
+  if (builder.has_value()) {
 
-    const void* requestPayload = instance.load_payload();
+    const void *requestPayload = instance.load_payload();
 
     auto requestHeader = iox::popo::RequestHeader::fromPayload(requestPayload);
     server->loan(requestHeader, sizeof(builder->GetSize()), alignof(1))
         .and_then([&](auto &responsePayload) {
-          memcpy(responsePayload, builder->GetBufferPointer(), builder->GetSize());
+          memcpy(responsePayload, builder->GetBufferPointer(),
+                 builder->GetSize());
           // auto response = static_cast<AddResponse*>(responsePayload);
           // response->sum = request->augend + request->addend;
           // std::cout << APP_NAME << " Send Response: " << response->sum <<
           // std::endl;
           server->send(responsePayload).or_else([&](auto &error) {
-            std::cout << "Could not send Response! Error: " << error << std::endl;
+            std::cout << "Could not send Response! Error: " << error
+                      << std::endl;
           });
         })
         .or_else([&](auto &error) {
@@ -326,10 +330,9 @@ bool ShmemServer::_process_client(const void *requestPayload) {
 
   // std::cerr << "Request" << std::endl;
 
+  // auto& instance = ExecutionStatus::status();
 
-  //auto& instance = ExecutionStatus::status();
-
-  //if(!instance.can_exec()) {
+  // if(!instance.can_exec()) {
 
   //  spdlog::error("Device is locked, not executing!");
 
@@ -358,21 +361,24 @@ bool ShmemServer::_process_client(const void *requestPayload) {
   // std::cerr << "replied " << d << " , " << d1 << " , total " << _sum <<
   // std::endl;
 
-  if(builder.has_value()) {
+  if (builder.has_value()) {
 
     auto requestHeader = iox::popo::RequestHeader::fromPayload(requestPayload);
     server->loan(requestHeader, sizeof(builder->GetSize()), alignof(1))
         .and_then([&](auto &responsePayload) {
-          memcpy(responsePayload, builder->GetBufferPointer(), builder->GetSize());
+          memcpy(responsePayload, builder->GetBufferPointer(),
+                 builder->GetSize());
           // auto response = static_cast<AddResponse*>(responsePayload);
           // response->sum = request->augend + request->addend;
           // std::cout << APP_NAME << " Send Response: " << response->sum <<
           // std::endl;
 
-          auto requestHeader = iox::popo::RequestHeader::fromPayload(requestPayload);
+          auto requestHeader =
+              iox::popo::RequestHeader::fromPayload(requestPayload);
           SPDLOG_DEBUG("Reply_request {}", requestHeader->getSequenceId());
           server->send(responsePayload).or_else([&](auto &error) {
-            std::cout << "Could not send Response! Error: " << error << std::endl;
+            std::cout << "Could not send Response! Error: " << error
+                      << std::endl;
           });
         })
         .or_else([&](auto &error) {
@@ -389,42 +395,34 @@ bool ShmemServer::_process_client(const void *requestPayload) {
 
     return false;
   }
-
 }
 
-iox::popo::WaitSet<>* SigHandler::waitset_ptr;
+iox::popo::WaitSet<> *SigHandler::waitset_ptr;
 bool SigHandler::quit = false;
 
-void ShmemServer::loop_wait(const char* user_name)
-{
+void ShmemServer::loop_wait(const char *user_name) {
 
-  server.reset(new iox::popo::UntypedServer({
-    iox::RuntimeName_t{iox::cxx::TruncateToCapacity_t{}, user_name},
-    "Gpuless",
-    "Client"
-  }));
+  server.reset(new iox::popo::UntypedServer(
+      {iox::RuntimeName_t{iox::cxx::TruncateToCapacity_t{}, user_name},
+       "Gpuless", "Client"}));
 
-  iox::popo::Publisher<int> orchestrator_send{
-    iox::capro::ServiceDescription{
-      iox::RuntimeName_t{iox::cxx::TruncateToCapacity_t{}, fmt::format("gpuless-{}", user_name)},
-      "Orchestrator",
-      "Send"
-    }
-  };
+  iox::popo::Publisher<int> orchestrator_send{iox::capro::ServiceDescription{
+      iox::RuntimeName_t{iox::cxx::TruncateToCapacity_t{},
+                         fmt::format("gpuless-{}", user_name)},
+      "Orchestrator", "Send"}};
 
-  iox::popo::Subscriber<int> orchestrator_recv{
-    iox::capro::ServiceDescription{
-      iox::RuntimeName_t{iox::cxx::TruncateToCapacity_t{}, fmt::format("gpuless-{}", user_name)},
-      "Orchestrator",
-      "Receive"
-    }
-  };
+  iox::popo::Subscriber<int> orchestrator_recv{iox::capro::ServiceDescription{
+      iox::RuntimeName_t{iox::cxx::TruncateToCapacity_t{},
+                         fmt::format("gpuless-{}", user_name)},
+      "Orchestrator", "Receive"}};
 
   iox::popo::WaitSet<> waitset;
 
   SigHandler::waitset_ptr = &waitset;
-  sigint.emplace(iox::posix::registerSignalHandler(iox::posix::Signal::INT, SigHandler::sigHandler));
-  sigterm.emplace(iox::posix::registerSignalHandler(iox::posix::Signal::TERM, SigHandler::sigHandler));
+  sigint.emplace(iox::posix::registerSignalHandler(iox::posix::Signal::INT,
+                                                   SigHandler::sigHandler));
+  sigterm.emplace(iox::posix::registerSignalHandler(iox::posix::Signal::TERM,
+                                                    SigHandler::sigHandler));
 
   waitset.attachState(*server, iox::popo::ServerState::HAS_REQUEST)
       .or_else([](auto) {
@@ -438,22 +436,19 @@ void ShmemServer::loop_wait(const char* user_name)
         std::exit(EXIT_FAILURE);
       });
 
-  orchestrator_send.loan().and_then(
-    [&](auto& payload) {
+  orchestrator_send.loan().and_then([&](auto &payload) {
+    *payload = static_cast<int>(GPUlessMessage::REGISTER);
+    orchestrator_send.publish(std::move(payload));
+  });
 
-      *payload = static_cast<int>(GPUlessMessage::REGISTER);
-      orchestrator_send.publish(std::move(payload));
-    }
-  );
-
-  std::queue<const void*> pendingPayload;
+  std::queue<const void *> pendingPayload;
   bool has_blocked_call = false;
-  auto& instance = ExecutionStatus::instance();
+  auto &instance = ExecutionStatus::instance();
 
   while (!SigHandler::quit) {
 
     auto notificationVector = waitset.wait();
-    //const void* pendingPayload = nullptr;
+    // const void* pendingPayload = nullptr;
 
     for (auto &notification : notificationVector) {
 
@@ -462,160 +457,165 @@ void ShmemServer::loop_wait(const char* user_name)
         bool no_more = false;
 
         int idx = 0;
-        while(!no_more) {
+        while (!no_more) {
 
-          server->take().and_then(
-            [&](auto &requestPayload) mutable {
-
-              ++idx;
-              auto requestHeader = iox::popo::RequestHeader::fromPayload(requestPayload);
-              SPDLOG_DEBUG("Received_request {} ", requestHeader->getSequenceId());
-              //spdlog::error("Received_request {} has blocked call {}", requestHeader->getSequenceId(), has_blocked_call);
-              if(instance.can_exec() && !has_blocked_call) {
-                //has_blocked_call = !_process_client(requestPayload);
-                has_blocked_call = !_process_client(requestPayload);
-              } else {
-                //pendingPayload = requestPayload;
-                //spdlog::error("Executor is blocked, appending payload");
-                pendingPayload.push(requestPayload);
-              }
-            }
-          ).or_else(
-            [&](auto& res) {
-              no_more = true;
-            }
-          );
+          server->take()
+              .and_then([&](auto &requestPayload) mutable {
+                ++idx;
+                auto requestHeader =
+                    iox::popo::RequestHeader::fromPayload(requestPayload);
+                SPDLOG_DEBUG("Received_request {} ",
+                             requestHeader->getSequenceId());
+                // spdlog::error("Received_request {} ",
+                // requestHeader->getSequenceId());
+                // spdlog::error("Received_request {} has blocked call {}",
+                // requestHeader->getSequenceId(), has_blocked_call);
+                if (instance.can_exec() && !has_blocked_call) {
+                  // has_blocked_call = !_process_client(requestPayload);
+                  has_blocked_call = !_process_client(requestPayload);
+                } else {
+                  // pendingPayload = requestPayload;
+                  // spdlog::error("Executor is blocked, appending payload");
+                  pendingPayload.push(requestPayload);
+                }
+              })
+              .or_else([&](auto &res) { no_more = true; });
         }
 
         SPDLOG_INFO("Received {} requests", idx);
+        MemoryStore::get_instance().print_stats();
 
       } else {
 
         auto val = orchestrator_recv.take();
 
-        while(!val.has_error()) {
+        static int count = 0;
+
+        while (!val.has_error()) {
 
           int code = *val->get();
           spdlog::error("Message from the orchestrator! Code {}", code);
 
-          auto& instance = ExecutionStatus::instance();
-          if(code == static_cast<int>(GPUlessMessage::LOCK_DEVICE)) {
+          auto &instance = ExecutionStatus::instance();
+          if (code == static_cast<int>(GPUlessMessage::LOCK_DEVICE)) {
             instance.lock();
-          } else if(code == static_cast<int>(GPUlessMessage::BASIC_EXEC)) {
+          } else if (code == static_cast<int>(GPUlessMessage::BASIC_EXEC)) {
             instance.basic_exec();
-          } else if(code == static_cast<int>(GPUlessMessage::MEMCPY_ONLY)) {
+          } else if (code == static_cast<int>(GPUlessMessage::MEMCPY_ONLY)) {
             instance.memcpy();
-          } else if(code == static_cast<int>(GPUlessMessage::FULL_EXEC)) {
+          } else if (code == static_cast<int>(GPUlessMessage::FULL_EXEC)) {
             instance.exec();
+            ++count;
           }
 
           val = orchestrator_recv.take();
         }
 
-        //spdlog::error("Has pending payload? {}", pendingPayload != nullptr);
+        // spdlog::error("Has pending payload? {}", pendingPayload != nullptr);
 
-        //spdlog::error("Has unfinished trace? {}", instance.has_unfinished_trace());
-        if(instance.has_unfinished_trace()) {
-          //spdlog::error("Process unfinished trace from pos {}", instance.load());
+        // spdlog::error("Has unfinished trace? {}",
+        // instance.has_unfinished_trace());
+        if (instance.has_unfinished_trace()) {
+          // spdlog::error("Process unfinished trace from pos {}",
+          // instance.load());
           has_blocked_call = !_process_remainder();
         }
 
-        //spdlog::error("Has pending payload? {}", !pendingPayload.empty());
-        // Check if there is anything to start
-        if(!pendingPayload.empty() && instance.can_exec()) {
+        // spdlog::error("Has pending payload? {}", !pendingPayload.empty());
+        //  Check if there is anything to start
+        if (!pendingPayload.empty() && instance.can_exec()) {
 
-          while(!pendingPayload.empty() && !has_blocked_call) {
+          while (!pendingPayload.empty() && !has_blocked_call) {
 
-            //spdlog::error("Process pending payload!");
+            // spdlog::error("Process pending payload!");
             auto payload = pendingPayload.front();
             pendingPayload.pop();
             has_blocked_call = !_process_client(payload);
-            //pendingPayload = nullptr;
-
+            // pendingPayload = nullptr;
           }
         }
-
       }
     }
   }
 }
 
-void ShmemServer::loop(const char* user_name)
-{
+void ShmemServer::loop(const char *user_name) {
 
   // FIXME: add here communication with orchestrato
-  server.reset(new iox::popo::UntypedServer({
-    iox::RuntimeName_t{iox::cxx::TruncateToCapacity_t{}, user_name},
-    "Gpuless",
-    "Client"
-  }));
+  server.reset(new iox::popo::UntypedServer(
+      {iox::RuntimeName_t{iox::cxx::TruncateToCapacity_t{}, user_name},
+       "Gpuless", "Client"}));
 
   double sum = 0;
   while (!iox::posix::hasTerminationRequested()) {
 
     server->take().and_then(
-      [&](auto &requestPayload) {
-        _process_client(requestPayload);
-      }
-    );
+        [&](auto &requestPayload) { _process_client(requestPayload); });
   }
 }
 
-void manage_device(const std::string& device, uint16_t port) {
-    setenv("CUDA_VISIBLE_DEVICES", device.c_str(), 1);
+void manage_device(const std::string &device, uint16_t port) {
+  setenv("CUDA_VISIBLE_DEVICES", device.c_str(), 1);
 
-    // start server
-    int s = socket(AF_INET, SOCK_STREAM, 0);
-    if (s < 0) {
-        SPDLOG_ERROR("failed to open socket");
-        exit(EXIT_FAILURE);
-    }
+  // start server
+  int s = socket(AF_INET, SOCK_STREAM, 0);
+  if (s < 0) {
+    SPDLOG_ERROR("failed to open socket");
+    exit(EXIT_FAILURE);
+  }
 
-    int opt = 1;
-    setsockopt(s, SOL_SOCKET, SO_REUSEADDR, (void *)&opt, sizeof(opt));
+  int opt = 1;
+  setsockopt(s, SOL_SOCKET, SO_REUSEADDR, (void *)&opt, sizeof(opt));
 
-    sockaddr_in sa{};
-    sa.sin_family = AF_INET;
-    sa.sin_addr.s_addr = INADDR_ANY;
-    sa.sin_port = htons(port);
+  sockaddr_in sa{};
+  sa.sin_family = AF_INET;
+  sa.sin_addr.s_addr = INADDR_ANY;
+  sa.sin_port = htons(port);
 
-    if (bind(s, (sockaddr *)&sa, sizeof(sa)) < 0) {
-        SPDLOG_ERROR("failed to bind socket");
-        close(s);
-        exit(EXIT_FAILURE);
-    }
-
-    if (listen(s, BACKLOG) < 0) {
-        std::cerr << "failed to listen on socket" << std::endl;
-        close(s);
-        exit(EXIT_FAILURE);
-    }
-
-    int s_new;
-    sockaddr remote_addr{};
-    socklen_t remote_addrlen = sizeof(remote_addr);
-    while ((s_new = accept(s, &remote_addr, &remote_addrlen))) {
-        SPDLOG_INFO("manager_device: connection from {}",
-                    inet_ntoa(((sockaddr_in *)&remote_addr)->sin_addr));
-
-        // synchronous request handler
-        handle_request(s_new);
-        close(s_new);
-    }
-
+  if (bind(s, (sockaddr *)&sa, sizeof(sa)) < 0) {
+    SPDLOG_ERROR("failed to bind socket");
     close(s);
+    exit(EXIT_FAILURE);
+  }
+
+  if (listen(s, BACKLOG) < 0) {
+    std::cerr << "failed to listen on socket" << std::endl;
+    close(s);
+    exit(EXIT_FAILURE);
+  }
+
+  int s_new;
+  sockaddr remote_addr{};
+  socklen_t remote_addrlen = sizeof(remote_addr);
+  while ((s_new = accept(s, &remote_addr, &remote_addrlen))) {
+    SPDLOG_INFO("manager_device: connection from {}",
+                inet_ntoa(((sockaddr_in *)&remote_addr)->sin_addr));
+
+    // synchronous request handler
+    handle_request(s_new);
+    close(s_new);
+  }
+
+  close(s);
   exit(EXIT_SUCCESS);
 }
 
 void manage_device_shmem(const std::string &device, const std::string &app_name,
-                         const std::string &poll_type, const char* user_name)
-{
+                         const std::string &poll_type, const char *user_name,
+                         bool use_vmm) {
 
   setenv("CUDA_VISIBLE_DEVICES", device.c_str(), 1);
 
   ShmemServer shm_server;
 
   shm_server.setup(app_name);
+
+  if (use_vmm) {
+    spdlog::error("Enabling use of VMM-based allocations in CUDA!");
+    MemoryStore::get_instance().enable_vmm();
+  } else {
+    spdlog::error("Using traditional memory allocations in CUDA!");
+  }
 
   // initialize cuda device pre-emptively
   getCudaVirtualDevice().initRealDevice();

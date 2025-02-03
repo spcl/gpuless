@@ -14,6 +14,7 @@
 #include "cubin_analysis.hpp"
 #include "cuda_virtual_device.hpp"
 #include "flatbuffers/flatbuffers.h"
+#include "manager/memory_store.hpp"
 
 namespace gpuless {
 

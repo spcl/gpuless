@@ -216,6 +216,18 @@ static void exitHandler() {
 
 extern "C" {
 
+void* mignificient_malloc(size_t size)
+{
+  getTraceExecutor();
+  auto chunk = pool->get(size, true);
+  return chunk.ptr;
+}
+
+void mignificient_free(void* ptr)
+{
+  pool->give(ptr);
+}
+
 /*
  * CUDA runtime API
  */
@@ -308,15 +320,23 @@ cudaError_t cudaMemcpy(void *dst, const void *src, size_t count,
         SPDLOG_INFO("{}() [cudaMemcpyHostToDevice, {} <- {}, pid={}]", __func__,
                     dst, src, getpid());
 
-
         if(pool) {
 
-          auto chunk = pool->get();
-          SPDLOG_DEBUG("Get pool chunk {}", chunk.name);
-          auto rec = std::make_shared<CudaMemcpyH2D>(dst, src, count, chunk.name);
-          std::memcpy(chunk.ptr, src, count);
+          auto chunk_name = pool->get_name(src);
 
-          getCudaTrace().record(rec);
+          if(chunk_name.has_value()) {
+            auto rec = std::make_shared<CudaMemcpyH2D>(dst, src, count, chunk_name.value());
+            getCudaTrace().record(rec);
+
+          } else {
+
+            auto chunk = pool->get(count);
+            SPDLOG_DEBUG("Get pool chunk {}", chunk.name);
+            auto rec = std::make_shared<CudaMemcpyH2D>(dst, src, count, chunk.name);
+            std::memcpy(chunk.ptr, src, count);
+            getCudaTrace().record(rec);
+          }
+
         } else {
           auto rec = std::make_shared<CudaMemcpyH2D>(dst, src, count);
 
@@ -330,17 +350,28 @@ cudaError_t cudaMemcpy(void *dst, const void *src, size_t count,
         SPDLOG_INFO("{}() [cudaMemcpyDeviceToHost, {} <- {}, pid={}]", __func__,
                     dst, src, getpid());
 
-
         if(pool) {
-          auto chunk = pool->get();
-          auto rec = std::make_shared<CudaMemcpyD2H>(dst, src, count, chunk.name);
-          getCudaTrace().record(rec);
-          getTraceExecutor()->synchronize(getCudaTrace());
 
-          // Host side - we copy the received data
-          std::memcpy(dst, chunk.ptr, count);
+          auto chunk_name = pool->get_name(dst);
 
-          pool->give(chunk.name);
+          if(chunk_name.has_value()) {
+
+            auto rec = std::make_shared<CudaMemcpyD2H>(dst, src, count, chunk_name.value());
+            getCudaTrace().record(rec);
+            getTraceExecutor()->synchronize(getCudaTrace());
+
+          } else {
+
+            auto chunk = pool->get(count);
+            auto rec = std::make_shared<CudaMemcpyD2H>(dst, src, count, chunk.name);
+            getCudaTrace().record(rec);
+            getTraceExecutor()->synchronize(getCudaTrace());
+
+            // Host side - we copy the received data
+            std::memcpy(dst, chunk.ptr, count);
+
+            pool->give(chunk.name);
+          }
 
         } else {
 
@@ -379,7 +410,7 @@ cudaError_t cudaMemcpyAsync(void *dst, const void *src, size_t count,
 
         if(pool) {
 
-          auto chunk = pool->get();
+          auto chunk = pool->get(count);
           auto rec = std::make_shared<CudaMemcpyAsyncH2D>(dst, src, count, stream, chunk.name);
           std::memcpy(chunk.ptr, src, count);
 
@@ -400,7 +431,7 @@ cudaError_t cudaMemcpyAsync(void *dst, const void *src, size_t count,
             __func__, dst, src, reinterpret_cast<uint64_t>(stream), getpid());
 
         if(pool) {
-          auto chunk = pool->get();
+          auto chunk = pool->get(count);
           auto rec = std::make_shared<CudaMemcpyAsyncD2H>(dst, src, count, stream, chunk.name);
           getCudaTrace().record(rec);
           getTraceExecutor()->synchronize(getCudaTrace());
@@ -521,7 +552,7 @@ cudaError_t cudaStreamSynchronize(cudaStream_t stream) {
     hijackInit();
     HIJACK_FN_PROLOGUE();
     getCudaTrace().record(std::make_shared<CudaStreamSynchronize>(stream));
-    //getTraceExecutor()->synchronize(getCudaTrace());
+    getTraceExecutor()->synchronize(getCudaTrace());
     return cudaSuccess;
 }
 
@@ -632,7 +663,8 @@ cudaError_t cudaOccupancyMaxActiveBlocksPerMultiprocessorWithFlags(
     unsigned int flags) {
     hijackInit();
     HIJACK_FN_PROLOGUE();
-    // TODO
+    // FIXME: add complete implementation. this is a conservative option
+    *numBlocks = 1;
     return cudaSuccess;
 }
 

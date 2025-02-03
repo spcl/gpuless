@@ -7,6 +7,7 @@
 #include "dlsym_util.hpp"
 #include "libgpuless.hpp"
 
+#include "manager/manager_device.hpp"
 #include "shmem/mempool.hpp"
 
 namespace gpuless {
@@ -22,10 +23,26 @@ std::string CudaRuntimeApiCall::nativeErrorToString(uint64_t err) {
  */
 CudaMalloc::CudaMalloc(size_t size) : devPtr(nullptr), size(size) {}
 
-uint64_t CudaMalloc::executeNative(CudaVirtualDevice &vdev) {
+uint64_t CudaMalloc::executeNative(CudaVirtualDevice &vdev)
+{
+  auto& instance = MemoryStore::get_instance();
+  if(instance.uses_vmm()) {
+
+    this->devPtr = instance.create_allocation(size);
+    return cudaSuccess;
+
+  } else {
+
     static auto real =
         (decltype(&cudaMalloc<void>))real_dlsym(RTLD_NEXT, "cudaMalloc");
-    return real(&this->devPtr, size);
+    auto ret = real(&this->devPtr, size);
+
+    if(ret == cudaSuccess) {
+      instance.add_allocation(this->devPtr, size);
+    }
+
+    return ret;
+  }
 }
 
 flatbuffers::Offset<FBCudaApiCall>
@@ -366,8 +383,22 @@ CudaMemcpyAsyncD2D::CudaMemcpyAsyncD2D(const FBCudaApiCall *fb_cuda_api_call) {
 CudaFree::CudaFree(void *devPtr) : devPtr(devPtr) {}
 
 uint64_t CudaFree::executeNative(CudaVirtualDevice &vdev) {
+  auto& instance = MemoryStore::get_instance();
+  if(instance.uses_vmm()) {
+
+    return instance.release_allocation(devPtr) ? cudaSuccess : cudaErrorInvalidValue;
+
+  } else {
+
     static auto real = (decltype(&cudaFree))real_dlsym(RTLD_NEXT, "cudaFree");
-    return real(this->devPtr);
+    auto ret = real(this->devPtr);
+
+    if(ret == cudaSuccess) {
+      instance.remove_allocation(this->devPtr);
+    }
+
+    return ret;
+  }
 }
 
 flatbuffers::Offset<FBCudaApiCall>
