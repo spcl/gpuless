@@ -36,6 +36,8 @@ if(BUILD_SHMEM)
   find_package(iceoryx_hoofs CONFIG REQUIRED)
 endif()
 
+add_compile_definitions(GPULESS_ELF_ANALYZER)
+
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 link_directories(${CMAKE_CURRENT_SOURCE_DIR}/lib)
 
@@ -131,6 +133,7 @@ target_include_directories(
 )
 add_dependencies(manager_device spdlog)
 add_dependencies(manager_device flatbuffer)
+target_link_options(manager_device PRIVATE "LINKER:-no-as-needed")
 target_link_libraries(manager_device
     iberty
     stdc++fs
@@ -207,6 +210,21 @@ target_link_libraries(gpuless
 if(BUILD_SHMEM)
   target_link_libraries(gpuless iceoryx_posh::iceoryx_posh iceoryx_hoofs::iceoryx_hoofs)
 endif()
+
+add_executable(cubin_analyzer
+    src/cubin_analyzer.cpp
+    src/trace/cubin_analysis.cpp
+    src/utils.cpp
+)
+target_include_directories(
+    cubin_analyzer SYSTEM PRIVATE $<TARGET_PROPERTY:spdlog::spdlog,INTERFACE_INCLUDE_DIRECTORIES>
+)
+add_dependencies(cubin_analyzer spdlog)
+target_link_libraries(cubin_analyzer
+    iberty
+    spdlog::spdlog
+    CUDA::cuda_driver
+)
 
 add_custom_command(
     TARGET gpuless POST_BUILD

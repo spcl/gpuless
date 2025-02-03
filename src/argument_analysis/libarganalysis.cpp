@@ -143,8 +143,8 @@ std::string addrToIdentHost(void *addr) {
     return ident;
 }
 
-CubinAnalyzer &getAnalyzer() {
-    static CubinAnalyzer analyzer;
+CubinAnalyzerPTX &getAnalyzer() {
+    static CubinAnalyzerPTX analyzer;
     static bool initialized = false;
 
     if (!initialized) {
@@ -254,7 +254,7 @@ extern "C" CUresult CUDAAPI cuLaunchKernel(
         std::string cmd = "echo " + kernel_symbol + "| c++filt";
         auto demangled_symbol = exec(cmd.c_str());
         ss << string_rstrip(demangled_symbol);
-        std::vector<KParamInfo> params;
+        std::vector<PTXKParamInfo> params;
 
         // grid/block configuaration
         ss << "grid(";
@@ -329,7 +329,7 @@ cudaError_t CUDARTAPI cudaLaunchKernel(const void *func, dim3 gridDim,
         err = real_func(func, gridDim, blockDim, args, sharedMem, stream);
 
         std::string &kernel_symbol = it->second;
-        std::vector<KParamInfo> params;
+        std::vector<PTXKParamInfo> params;
         analyzer.kernel_parameters(kernel_symbol, params);
 
         std::stringstream ss;

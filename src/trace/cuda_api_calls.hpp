@@ -107,10 +107,19 @@ class CudaMemcpyAsyncH2D : public CudaRuntimeApiCall {
     const void *src;
     size_t size;
     cudaStream_t stream;
+    //std::vector<uint8_t> buffer;
+
+    // Data was transmitted directly in the payload - legacy option for FB
     std::vector<uint8_t> buffer;
+    // Data is located on our side as a pointer
+    uint8_t* buffer_ptr;
+    // The name of the shared memory page passed from another process
+    std::string shared_name;
 
     CudaMemcpyAsyncH2D(void *dst, const void *src, size_t size,
                        cudaStream_t stream);
+    CudaMemcpyAsyncH2D(void *dst, const void *src, size_t size,
+                       cudaStream_t stream, std::string shared_name);
     explicit CudaMemcpyAsyncH2D(const FBCudaApiCall *fb_cuda_api_call);
 
     uint64_t executeNative(CudaVirtualDevice &vdev) override;
@@ -127,10 +136,18 @@ class CudaMemcpyAsyncD2H : public CudaRuntimeApiCall {
     const void *src;
     size_t size;
     cudaStream_t stream;
+    //std::vector<uint8_t> buffer;
+
     std::vector<uint8_t> buffer;
+    // Data is located on our side as a pointer
+    uint8_t* buffer_ptr;
+    // The name of the shared memory page passed from another process
+    std::string shared_name;
 
     CudaMemcpyAsyncD2H(void *dst, const void *src, size_t size,
                        cudaStream_t stream);
+    CudaMemcpyAsyncD2H(void *dst, const void *src, size_t size,
+                       cudaStream_t stream, std::string shared_name);
     explicit CudaMemcpyAsyncD2H(const FBCudaApiCall *fb_cuda_api_call);
 
     uint64_t executeNative(CudaVirtualDevice &vdev) override;
@@ -183,8 +200,13 @@ class CudaLaunchKernel : public CudaRuntimeApiCall {
     cudaStream_t stream;
 
     std::vector<std::vector<uint8_t>> paramBuffers;
-    std::vector<KParamInfo> paramInfos;
+#if defined(GPULESS_ELF_ANALYZER)
+    std::vector<int> paramInfos;
+#else
+    std::vector<PTXKParamInfo> paramInfos;
+#endif
 
+#if defined(GPULESS_ELF_ANALYZER)
     CudaLaunchKernel(std::string symbol,
                      std::vector<uint64_t> required_cuda_modules,
                      std::vector<std::string> required_function_symbols,
@@ -192,7 +214,17 @@ class CudaLaunchKernel : public CudaRuntimeApiCall {
                      const dim3 &blockDim, size_t sharedMem,
                      cudaStream_t stream,
                      std::vector<std::vector<uint8_t>> &paramBuffers,
-                     std::vector<KParamInfo> &paramInfos);
+                     std::vector<int> &paramInfos);
+#else
+    CudaLaunchKernel(std::string symbol,
+                     std::vector<uint64_t> required_cuda_modules,
+                     std::vector<std::string> required_function_symbols,
+                     const void *fnPtr, const dim3 &gridDim,
+                     const dim3 &blockDim, size_t sharedMem,
+                     cudaStream_t stream,
+                     std::vector<std::vector<uint8_t>> &paramBuffers,
+                     std::vector<PTXKParamInfo> &paramInfos);
+#endif
     explicit CudaLaunchKernel(const FBCudaApiCall *fb_cuda_api_call);
 
     uint64_t executeNative(CudaVirtualDevice &vdev) override;

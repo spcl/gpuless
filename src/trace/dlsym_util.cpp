@@ -9,9 +9,6 @@
 
 char hostname[HOST_NAME_MAX + 1];
 
-
-
-
 void *real_dlsym(void *handle, const char *symbol) {
 #ifdef CSCS
     	static auto internal_dlsym = (decltype(&dlsym))__libc_dlsym(
@@ -19,5 +16,6 @@ void *real_dlsym(void *handle, const char *symbol) {
 #else
     	static auto internal_dlsym = (decltype(&dlsym))dlvsym(RTLD_NEXT, "dlsym", "GLIBC_2.34");
 #endif
-    return (*internal_dlsym)(handle, symbol);
+    auto ptr = (*internal_dlsym)(handle, symbol);
+    return ptr;
 }

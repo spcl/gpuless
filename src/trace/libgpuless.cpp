@@ -147,14 +147,34 @@ std::shared_ptr<TraceExecutor> getTraceExecutor(bool clean) {
     return trace_executor;
 }
 
-static CubinAnalyzer &getCubinAnalyzer() {
-    static CubinAnalyzer cubin_analyzer;
+static CubinAnalyzerPTX &getCubinAnalyzer() {
+    static CubinAnalyzerPTX cubin_analyzer;
+    return cubin_analyzer;
+}
+
+static CubinAnalyzerELF &getCubinAnalyzerELF() {
+    static CubinAnalyzerELF cubin_analyzer;
     return cubin_analyzer;
 }
 
 CudaTrace &getCudaTrace() {
     static CudaTrace cuda_trace;
 
+#if defined(GPULESS_ELF_ANALYZER)
+    if (!getCubinAnalyzerELF().isInitialized()) {
+      char* elf_defs = std::getenv("GPULESS_ELF_DEFINITION");
+      if(elf_defs == nullptr) {
+        spdlog::error("please set GPULESS_ELF_DEFINITION environment variable");
+        std::exit(EXIT_FAILURE);
+      }
+
+      std::vector<std::string> files;
+      string_split(std::string(elf_defs), ',', files);
+      if(!getCubinAnalyzerELF().analyze(files)) {
+        std::exit(EXIT_FAILURE);
+      }
+    }
+#else
     if (!getCubinAnalyzer().isInitialized()) {
         char *cuda_binary = std::getenv("CUDA_BINARY");
         if (cuda_binary == nullptr) {
@@ -169,6 +189,7 @@ CudaTrace &getCudaTrace() {
         getCubinAnalyzer().analyze(binaries, CUDA_MAJOR_VERSION,
                                    CUDA_MINOR_VERSION);
     }
+#endif
 
     return cuda_trace;
 }
@@ -351,27 +372,57 @@ cudaError_t cudaMemcpyAsync(void *dst, const void *src, size_t count,
                             enum cudaMemcpyKind kind, cudaStream_t stream) {
     hijackInit();
     if (kind == cudaMemcpyHostToDevice) {
+
         SPDLOG_INFO(
             "{}() [cudaMemcpyHostToDevice, {} <- {}, stream={}, pid={}]",
             __func__, dst, src, reinterpret_cast<uint64_t>(stream), getpid());
-        auto rec =
-            std::make_shared<CudaMemcpyAsyncH2D>(dst, src, count, stream);
-        std::memcpy(rec->buffer.data(), src, count);
-        getCudaTrace().record(rec);
+
+        if(pool) {
+
+          auto chunk = pool->get();
+          auto rec = std::make_shared<CudaMemcpyAsyncH2D>(dst, src, count, stream, chunk.name);
+          std::memcpy(chunk.ptr, src, count);
+
+          getCudaTrace().record(rec);
+        } else {
+          auto rec = std::make_shared<CudaMemcpyAsyncH2D>(dst, src, count, stream);
+
+          // Host side - we copy the data for sending
+          std::memcpy(rec->buffer.data(), src, count);
+          getCudaTrace().record(rec);
+        }
+
+        getTraceExecutor()->send_only(getCudaTrace());
+
     } else if (kind == cudaMemcpyDeviceToHost) {
         SPDLOG_INFO(
             "{}() [cudaMemcpyDeviceToHost, {} <- {}, stream={}, pid={}]",
             __func__, dst, src, reinterpret_cast<uint64_t>(stream), getpid());
-        auto rec =
-            std::make_shared<CudaMemcpyAsyncD2H>(dst, src, count, stream);
-        getCudaTrace().record(rec);
-        getTraceExecutor()->synchronize(getCudaTrace());
 
-        std::shared_ptr<CudaMemcpyAsyncD2H> top =
-            (const std::shared_ptr<CudaMemcpyAsyncD2H> &)getCudaTrace()
-                .historyTop();
-        std::memcpy(dst, top->buffer.data(), count);
+        if(pool) {
+          auto chunk = pool->get();
+          auto rec = std::make_shared<CudaMemcpyAsyncD2H>(dst, src, count, stream, chunk.name);
+          getCudaTrace().record(rec);
+          getTraceExecutor()->synchronize(getCudaTrace());
 
+          // Host side - we copy the received data
+          std::memcpy(dst, chunk.ptr, count);
+
+          pool->give(chunk.name);
+
+        } else {
+
+          auto rec =
+              std::make_shared<CudaMemcpyAsyncD2H>(dst, src, count, stream);
+
+          getCudaTrace().record(rec);
+          getTraceExecutor()->synchronize(getCudaTrace());
+
+          std::shared_ptr<CudaMemcpyAsyncD2H> top =
+              (const std::shared_ptr<CudaMemcpyAsyncD2H> &)getCudaTrace()
+                  .historyTop();
+          std::memcpy(dst, top->buffer_ptr, count);
+        }
         //        auto *dstb = reinterpret_cast<uint8_t *>(dst);
         //        SPDLOG_DEBUG("cudaMemcpyAsyncD2H memory probe: {:x} {:x} {:x}
         //        {:x}",
@@ -402,7 +453,21 @@ cudaError_t cudaLaunchKernel(const void *func, dim3 gridDim, dim3 blockDim,
     SPDLOG_INFO("cudaLaunchKernel({})", cpp_demangle(symbol).c_str());
     // SPDLOG_DEBUG("")
 
-    std::vector<KParamInfo> paramInfos;
+#if defined(GPULESS_ELF_ANALYZER)
+    std::vector<int> paramInfos;
+    const auto &analyzer = getCubinAnalyzerELF();
+    if (!analyzer.kernel_parameters(symbol, paramInfos)) {
+        EXIT_UNRECOVERABLE("unable to look up kernel parameter data for " + symbol);
+    }
+
+    std::vector<std::vector<uint8_t>> paramBuffers(paramInfos.size());
+    for (unsigned i = 0; i < paramInfos.size(); i++) {
+        const auto &p = paramInfos[i];
+        paramBuffers[i].resize(p);
+        std::memcpy(paramBuffers[i].data(), args[i], p);
+    }
+#else
+    std::vector<PTXKParamInfo> paramInfos;
     const auto &analyzer = getCubinAnalyzer();
     if (!analyzer.kernel_parameters(symbol, paramInfos)) {
         EXIT_UNRECOVERABLE("unable to look up kernel parameter data");
@@ -424,6 +489,7 @@ cudaError_t cudaLaunchKernel(const void *func, dim3 gridDim, dim3 blockDim,
         paramBuffers[i].resize(p.size * p.typeSize);
         std::memcpy(paramBuffers[i].data(), args[i], p.size * p.typeSize);
     }
+#endif
 
     auto &cuda_trace = getCudaTrace();
     auto &symbol_to_module_id_map = cuda_trace.getSymbolToModuleId();
@@ -774,7 +840,8 @@ void *dlsym(void *handle, const char *symbol) {
 
     // early out if not a CUDA driver symbol
     if (strncmp(symbol, "cu", 2) != 0) {
-        return (real_dlsym(handle, symbol));
+        auto p = (real_dlsym(handle, symbol));
+        return p;
     }
 
     LINK_CU_FUNCTION_DLSYM(symbol, cuGetProcAddress);

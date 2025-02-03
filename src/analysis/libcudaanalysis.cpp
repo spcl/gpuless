@@ -93,8 +93,8 @@ std::string addrToIdentHost(void *addr) {
     return ident;
 }
 
-CubinAnalyzer &getAnalyzer() {
-    static CubinAnalyzer analyzer;
+CubinAnalyzerPTX &getAnalyzer() {
+    static CubinAnalyzerPTX analyzer;
     static bool initialized = false;
 
     if (!initialized) {

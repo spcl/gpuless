@@ -199,22 +199,40 @@ CudaMemcpyD2D::CudaMemcpyD2D(const FBCudaApiCall *fb_cuda_api_call) {
  */
 CudaMemcpyAsyncH2D::CudaMemcpyAsyncH2D(void *dst, const void *src, size_t size,
                                        cudaStream_t stream)
-    : dst(dst), src(src), size(size), stream(stream), buffer(size) {}
+    : dst(dst), src(src), size(size), stream(stream), buffer(size), shared_name("") {}
+
+CudaMemcpyAsyncH2D::CudaMemcpyAsyncH2D(void *dst, const void *src, size_t size,
+                                       cudaStream_t stream, std::string shared_name)
+    : dst(dst), src(src), size(size), stream(stream), buffer(size), shared_name(shared_name) {}
 
 uint64_t CudaMemcpyAsyncH2D::executeNative(CudaVirtualDevice &vdev) {
     static auto real =
         (decltype(&cudaMemcpyAsync))real_dlsym(RTLD_NEXT, "cudaMemcpyAsync");
-    return real(this->dst, this->buffer.data(), this->size,
+    return real(this->dst, this->buffer_ptr, this->size,
                 cudaMemcpyHostToDevice, this->stream);
 }
 
 flatbuffers::Offset<FBCudaApiCall>
 CudaMemcpyAsyncH2D::fbSerialize(flatbuffers::FlatBufferBuilder &builder) {
-    auto api_call = CreateFBCudaMemcpyAsyncH2D(
+
+    flatbuffers::Offset<FBCudaMemcpyAsyncH2D> api_call;
+    if(!this->shared_name.empty()) {
+      api_call = CreateFBCudaMemcpyAsyncH2D(
         builder, reinterpret_cast<uint64_t>(this->dst),
         reinterpret_cast<uint64_t>(this->src), this->size,
         reinterpret_cast<uint64_t>(this->stream),
+        builder.CreateString(this->shared_name),
+        builder.CreateVector(static_cast<uint8_t*>(nullptr), 0));
+
+    } else {
+      api_call = CreateFBCudaMemcpyAsyncH2D(
+        builder, reinterpret_cast<uint64_t>(this->dst),
+        reinterpret_cast<uint64_t>(this->src), this->size,
+        reinterpret_cast<uint64_t>(this->stream),
+        builder.CreateString(this->shared_name),
         builder.CreateVector(this->buffer));
+    }
+
     auto api_call_union = CreateFBCudaApiCall(
         builder, FBCudaApiCallUnion_FBCudaMemcpyAsyncH2D, api_call.Union());
     return api_call_union;
@@ -226,8 +244,14 @@ CudaMemcpyAsyncH2D::CudaMemcpyAsyncH2D(const FBCudaApiCall *fb_cuda_api_call) {
     this->src = reinterpret_cast<void *>(c->src());
     this->size = c->size();
     this->stream = reinterpret_cast<cudaStream_t>(c->stream());
-    this->buffer = std::vector<uint8_t>(c->size());
-    std::memcpy(this->buffer.data(), c->buffer()->data(), c->buffer()->size());
+    this->shared_name = c->mmap()->str();
+
+    if(c->mmap()->size() == 0) {
+      this->buffer_ptr = const_cast<unsigned char*>(c->buffer()->data());
+    } else {
+      auto ptr = MemPoolRead::get_instance().get(this->shared_name);
+      this->buffer_ptr = reinterpret_cast<unsigned char*>(ptr);
+    }
 }
 
 /*
@@ -235,22 +259,53 @@ CudaMemcpyAsyncH2D::CudaMemcpyAsyncH2D(const FBCudaApiCall *fb_cuda_api_call) {
  */
 CudaMemcpyAsyncD2H::CudaMemcpyAsyncD2H(void *dst, const void *src, size_t size,
                                        cudaStream_t stream)
-    : dst(dst), src(src), size(size), stream(stream), buffer(size) {}
+    : dst(dst), src(src), size(size), stream(stream), buffer(size), buffer_ptr(nullptr), shared_name("") {}
+
+CudaMemcpyAsyncD2H::CudaMemcpyAsyncD2H(void *dst, const void *src, size_t size,
+                                       cudaStream_t stream, std::string shared_name)
+    : dst(dst), src(src), size(size), stream(stream), buffer_ptr(nullptr), shared_name(shared_name) {}
 
 uint64_t CudaMemcpyAsyncD2H::executeNative(CudaVirtualDevice &vdev) {
     static auto real =
         (decltype(&cudaMemcpyAsync))real_dlsym(RTLD_NEXT, "cudaMemcpyAsync");
-    return real(this->buffer.data(), this->src, this->size,
+    return real(this->buffer_ptr, this->src, this->size,
                 cudaMemcpyDeviceToHost, this->stream);
 }
 
 flatbuffers::Offset<FBCudaApiCall>
 CudaMemcpyAsyncD2H::fbSerialize(flatbuffers::FlatBufferBuilder &builder) {
-    auto api_call = CreateFBCudaMemcpyAsyncD2H(
+
+    flatbuffers::Offset<FBCudaMemcpyAsyncD2H> api_call;
+
+    if(!this->shared_name.empty()) {
+      // We send a name of a shared memory page
+      api_call = CreateFBCudaMemcpyAsyncD2H(
         builder, reinterpret_cast<uint64_t>(this->dst),
         reinterpret_cast<uint64_t>(this->src), this->size,
         reinterpret_cast<uint64_t>(this->stream),
-        builder.CreateVector(this->buffer));
+        builder.CreateString(this->shared_name),
+        builder.CreateVector(static_cast<uint8_t*>(nullptr), 0)
+      );
+    } else if(buffer_ptr) {
+      // We can copy the data from an existing ptr
+      api_call = CreateFBCudaMemcpyAsyncD2H(
+        builder, reinterpret_cast<uint64_t>(this->dst),
+        reinterpret_cast<uint64_t>(this->src), this->size,
+        reinterpret_cast<uint64_t>(this->stream),
+        builder.CreateString(this->shared_name),
+        builder.CreateVector(this->buffer_ptr, this->size)
+      );
+    } else {
+      // We let FB copy the data directly
+      api_call = CreateFBCudaMemcpyAsyncD2H(
+        builder, reinterpret_cast<uint64_t>(this->dst),
+        reinterpret_cast<uint64_t>(this->src), this->size,
+        reinterpret_cast<uint64_t>(this->stream),
+        builder.CreateString(this->shared_name),
+        builder.CreateVector(this->buffer)
+      );
+    }
+
     auto api_call_union = CreateFBCudaApiCall(
         builder, FBCudaApiCallUnion_FBCudaMemcpyAsyncD2H, api_call.Union());
     return api_call_union;
@@ -262,8 +317,14 @@ CudaMemcpyAsyncD2H::CudaMemcpyAsyncD2H(const FBCudaApiCall *fb_cuda_api_call) {
     this->src = reinterpret_cast<void *>(c->src());
     this->size = c->size();
     this->stream = reinterpret_cast<cudaStream_t>(c->stream());
-    this->buffer = std::vector<uint8_t>(c->size());
-    std::memcpy(this->buffer.data(), c->buffer()->data(), c->buffer()->size());
+    this->shared_name = c->mmap()->str();
+
+    if(this->shared_name.empty()) {
+      this->buffer_ptr = const_cast<unsigned char*>(c->buffer()->data());
+    } else {
+      auto ptr = MemPoolRead::get_instance().get(this->shared_name);
+      this->buffer_ptr = reinterpret_cast<unsigned char*>(ptr);
+    }
 }
 
 /*
@@ -326,16 +387,29 @@ CudaFree::CudaFree(const FBCudaApiCall *fb_cuda_api_call) {
 /*
  * cudaLaunchKernel
  */
+#if defined(GPULESS_ELF_ANALYZER)
 CudaLaunchKernel::CudaLaunchKernel(
     std::string symbol, std::vector<uint64_t> required_cuda_modules,
     std::vector<std::string> required_function_symbols, const void *fnPtr,
     const dim3 &gridDim, const dim3 &blockDim, size_t sharedMem,
     cudaStream_t stream, std::vector<std::vector<uint8_t>> &paramBuffers,
-    std::vector<KParamInfo> &paramInfos)
+    std::vector<int> &paramInfos)
     : symbol(symbol), required_cuda_modules_(required_cuda_modules),
       required_function_symbols_(required_function_symbols), fnPtr(fnPtr),
       gridDim(gridDim), blockDim(blockDim), sharedMem(sharedMem),
       stream(stream), paramBuffers(paramBuffers), paramInfos(paramInfos) {}
+#else
+CudaLaunchKernel::CudaLaunchKernel(
+    std::string symbol, std::vector<uint64_t> required_cuda_modules,
+    std::vector<std::string> required_function_symbols, const void *fnPtr,
+    const dim3 &gridDim, const dim3 &blockDim, size_t sharedMem,
+    cudaStream_t stream, std::vector<std::vector<uint8_t>> &paramBuffers,
+    std::vector<PTXKParamInfo> &paramInfos)
+    : symbol(symbol), required_cuda_modules_(required_cuda_modules),
+      required_function_symbols_(required_function_symbols), fnPtr(fnPtr),
+      gridDim(gridDim), blockDim(blockDim), sharedMem(sharedMem),
+      stream(stream), paramBuffers(paramBuffers), paramInfos(paramInfos) {}
+#endif
 
 uint64_t CudaLaunchKernel::executeNative(CudaVirtualDevice &vdev) {
     static auto real = GET_REAL_FUNCTION(cuLaunchKernel);
@@ -387,10 +461,19 @@ CudaLaunchKernel::fbSerialize(flatbuffers::FlatBufferBuilder &builder) {
     }
     std::vector<flatbuffers::Offset<FBParamInfo>> fb_param_infos;
     for (const auto &p : this->paramInfos) {
+        // FIXME: proper structure without unnecessary data
+#if defined(GPULESS_ELF_ANALYZER)
+        fb_param_infos.push_back(CreateFBParamInfo(builder, 
+          builder.CreateString(""),
+          FBPtxParameterType_s8,
+          0, 0, p
+        ));
+#else
         fb_param_infos.push_back(
             CreateFBParamInfo(builder, builder.CreateString(p.paramName),
                               static_cast<FBPtxParameterType>(p.type),
                               p.typeSize, p.align, p.size));
+#endif
     }
 
     auto gdim = FBDim3{this->gridDim.x, this->gridDim.y, this->gridDim.z};
@@ -427,15 +510,22 @@ CudaLaunchKernel::CudaLaunchKernel(const FBCudaApiCall *fb_cuda_api_call) {
         std::memcpy(pb.back().data(), b->buffer()->data(), b->buffer()->size());
     }
 
-    std::vector<KParamInfo> kpi;
+#if defined(GPULESS_ELF_ANALYZER)
+    std::vector<int> kpi;
     for (const auto &i : *c->param_infos()) {
-        KParamInfo info{i->name()->str(),
+        kpi.push_back(static_cast<int>(i->size()));
+    }
+#else
+    std::vector<PTXKParamInfo> kpi;
+    for (const auto &i : *c->param_infos()) {
+        PTXKParamInfo info{i->name()->str(),
                         static_cast<PtxParameterType>(i->ptx_param_type()),
                         static_cast<int>(i->type_size()),
                         static_cast<int>(i->align()),
                         static_cast<int>(i->size())};
         kpi.push_back(info);
     }
+#endif
 
     this->symbol = c->symbol()->str();
 
