@@ -7,7 +7,8 @@
 #include <vector>
 #include <optional>
 
-#include <iceoryx_posh/popo/untyped_server.hpp>
+#include <iceoryx_posh/popo/untyped_publisher.hpp>
+#include <iceoryx_posh/popo/untyped_subscriber.hpp>
 #include <iceoryx_posh/popo/wait_set.hpp>
 #include <iceoryx_hoofs/posix_wrapper/signal_watcher.hpp>
 #include <spdlog/spdlog.h>
@@ -135,7 +136,8 @@ private:
 
 struct ShmemServer {
 
-  std::unique_ptr<iox::popo::UntypedServer> server;
+  std::unique_ptr<iox::popo::UntypedPublisher> client_publisher;
+  std::unique_ptr<iox::popo::UntypedSubscriber> client_subscriber;
 
   void setup(const std::string app_name);
   void loop(const char*);

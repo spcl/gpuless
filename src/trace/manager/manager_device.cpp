@@ -12,6 +12,8 @@
 
 #include <iceoryx_hoofs/cxx/string.hpp>
 #include <iceoryx_posh/popo/untyped_server.hpp>
+#include <iceoryx_posh/popo/untyped_publisher.hpp>
+#include <iceoryx_posh/popo/untyped_subscriber.hpp>
 #include <iceoryx_posh/popo/wait_set.hpp>
 #include <iceoryx_posh/runtime/posh_runtime.hpp>
 
@@ -299,7 +301,7 @@ void ShmemServer::setup(const std::string app_name) {
 }
 
 void *ShmemServer::take() {
-  auto ptr = this->server->take();
+  auto ptr = this->client_subscriber->take();
   if (ptr.has_error()) {
     return nullptr;
   } else {
@@ -307,7 +309,7 @@ void *ShmemServer::take() {
   }
 }
 
-void ShmemServer::release(void *ptr) { this->server->releaseRequest(ptr); }
+void ShmemServer::release(void *ptr) { this->client_subscriber->release(ptr); }
 
 bool ShmemServer::_process_remainder() {
   auto &instance = ExecutionStatus::instance();
@@ -318,26 +320,24 @@ bool ShmemServer::_process_remainder() {
 
     const void *requestPayload = instance.load_payload();
 
-    auto requestHeader = iox::popo::RequestHeader::fromPayload(requestPayload);
-    server->loan(requestHeader, sizeof(builder->GetSize()), alignof(1))
+    client_publisher->loan(builder->GetSize(), alignof(1), sizeof(int), alignof(1))
         .and_then([&](auto &responsePayload) {
+
           memcpy(responsePayload, builder->GetBufferPointer(),
                  builder->GetSize());
-          // auto response = static_cast<AddResponse*>(responsePayload);
-          // response->sum = request->augend + request->addend;
-          // std::cout << APP_NAME << " Send Response: " << response->sum <<
-          // std::endl;
-          server->send(responsePayload).or_else([&](auto &error) {
-            std::cout << "Could not send Response! Error: " << error
-                      << std::endl;
-          });
+
+          auto header = static_cast<int*>(iox::mepoo::ChunkHeader::fromUserPayload(responsePayload)->userHeader());
+          auto old_header = static_cast<const int*>(iox::mepoo::ChunkHeader::fromUserPayload(requestPayload)->userHeader());
+          *header = *old_header;
+
+          client_publisher->publish(responsePayload);
         })
         .or_else([&](auto &error) {
           std::cout << "Could not allocate Response! Error: " << error
                     << std::endl;
         });
 
-    server->releaseRequest(requestPayload);
+    client_subscriber->release(requestPayload);
 
     return true;
   } else {
@@ -393,30 +393,25 @@ bool ShmemServer::_process_client(const void *requestPayload) {
 
   if (builder.has_value()) {
 
-    auto requestHeader = iox::popo::RequestHeader::fromPayload(requestPayload);
-    server->loan(requestHeader, sizeof(builder->GetSize()), alignof(1))
+    client_publisher->loan(builder->GetSize(), alignof(1), sizeof(int), alignof(int))
         .and_then([&](auto &responsePayload) {
           memcpy(responsePayload, builder->GetBufferPointer(),
                  builder->GetSize());
-          // auto response = static_cast<AddResponse*>(responsePayload);
-          // response->sum = request->augend + request->addend;
-          // std::cout << APP_NAME << " Send Response: " << response->sum <<
-          // std::endl;
 
-          auto requestHeader =
-              iox::popo::RequestHeader::fromPayload(requestPayload);
-          SPDLOG_DEBUG("Reply_request {}", requestHeader->getSequenceId());
-          server->send(responsePayload).or_else([&](auto &error) {
-            std::cout << "Could not send Response! Error: " << error
-                      << std::endl;
-          });
+          auto header = static_cast<const int*>(iox::mepoo::ChunkHeader::fromUserPayload(requestPayload)->userHeader());
+          SPDLOG_DEBUG("Reply_request {}", *header);
+
+          auto new_header = static_cast<int*>(iox::mepoo::ChunkHeader::fromUserPayload(responsePayload)->userHeader());
+          *new_header = *header;
+
+          client_publisher->publish(responsePayload);
         })
         .or_else([&](auto &error) {
           std::cout << "Could not allocate Response! Error: " << error
                     << std::endl;
         });
 
-    server->releaseRequest(requestPayload);
+    client_subscriber->release(requestPayload);
 
     return true;
   } else {
@@ -432,9 +427,13 @@ bool SigHandler::quit = false;
 
 void ShmemServer::loop_wait(const char *user_name) {
 
-  server.reset(new iox::popo::UntypedServer(
+  client_publisher.reset(new iox::popo::UntypedPublisher(
       {iox::RuntimeName_t{iox::cxx::TruncateToCapacity_t{}, user_name},
-       "Gpuless", "Client"}));
+       "Gpuless", "Response"}));
+
+  client_subscriber.reset(new iox::popo::UntypedSubscriber(
+      {iox::RuntimeName_t{iox::cxx::TruncateToCapacity_t{}, user_name},
+       "Gpuless", "Request"}));
 
   iox::popo::Publisher<int> orchestrator_send{iox::capro::ServiceDescription{
       iox::RuntimeName_t{iox::cxx::TruncateToCapacity_t{},
@@ -454,7 +453,7 @@ void ShmemServer::loop_wait(const char *user_name) {
   sigterm.emplace(iox::posix::registerSignalHandler(iox::posix::Signal::TERM,
                                                     SigHandler::sigHandler));
 
-  waitset.attachState(*server, iox::popo::ServerState::HAS_REQUEST)
+  waitset.attachState(*client_subscriber, iox::popo::SubscriberState::HAS_DATA)
       .or_else([](auto) {
         std::cerr << "failed to attach server" << std::endl;
         std::exit(EXIT_FAILURE);
@@ -482,24 +481,20 @@ void ShmemServer::loop_wait(const char *user_name) {
 
     for (auto &notification : notificationVector) {
 
-      if (notification->doesOriginateFrom(server.get())) {
+      if (notification->doesOriginateFrom(client_subscriber.get())) {
 
         bool no_more = false;
 
         int idx = 0;
         while (!no_more) {
 
-          server->take()
+          client_subscriber->take()
               .and_then([&](auto &requestPayload) mutable {
                 ++idx;
-                auto requestHeader =
-                    iox::popo::RequestHeader::fromPayload(requestPayload);
-                SPDLOG_DEBUG("Received_request {} ",
-                             requestHeader->getSequenceId());
-                // spdlog::error("Received_request {} ",
-                // requestHeader->getSequenceId());
-                // spdlog::error("Received_request {} has blocked call {}",
-                // requestHeader->getSequenceId(), has_blocked_call);
+
+                auto new_header = static_cast<const int*>(iox::mepoo::ChunkHeader::fromUserPayload(requestPayload)->userHeader());
+                SPDLOG_DEBUG("Received_request {} ", *new_header);
+
                 if (instance.can_exec() && !has_blocked_call) {
                   // has_blocked_call = !_process_client(requestPayload);
                   has_blocked_call = !_process_client(requestPayload);
@@ -572,15 +567,15 @@ void ShmemServer::loop_wait(const char *user_name) {
 void ShmemServer::loop(const char *user_name) {
 
   // FIXME: add here communication with orchestrato
-  server.reset(new iox::popo::UntypedServer(
-      {iox::RuntimeName_t{iox::cxx::TruncateToCapacity_t{}, user_name},
-       "Gpuless", "Client"}));
-
+  //server.reset(new iox::popo::UntypedServer(
+  //    {iox::RuntimeName_t{iox::cxx::TruncateToCapacity_t{}, user_name},
+  //     "Gpuless", "Client"}));
+  abort();
   double sum = 0;
   while (!iox::posix::hasTerminationRequested()) {
 
-    server->take().and_then(
-        [&](auto &requestPayload) { _process_client(requestPayload); });
+    //server->take().and_then(
+    //    [&](auto &requestPayload) { _process_client(requestPayload); });
   }
 }
 

@@ -50,25 +50,32 @@ TraceExecutorShmem::TraceExecutorShmem()
       );
     }
 
-    client.reset(new iox::popo::UntypedClient({
-      iox::RuntimeName_t{iox::cxx::TruncateToCapacity_t{}, user_name},
-      "Gpuless",
-      "Client"
+    request_publisher.reset(new iox::popo::UntypedPublisher({
+        iox::capro::ServiceDescription{
+            iox::RuntimeName_t{iox::cxx::TruncateToCapacity_t{}, user_name},
+            "Gpuless",
+            "Request"
+        }
     }));
+
+    request_subscriber.reset(new iox::popo::UntypedSubscriber({
+        iox::capro::ServiceDescription{
+            iox::RuntimeName_t{iox::cxx::TruncateToCapacity_t{}, user_name},
+            "Gpuless",
+            "Response"
+        }
+    }));
+
 
     waitset.emplace();
     wait_poll = std::string_view{std::getenv("POLL_TYPE")} == "wait";
 
     if(wait_poll) {
-      //waitset.value().attachState(*client, iox::popo::ClientState::HAS_RESPONSE).or_else([](auto) {
-      //    std::cerr << "failed to attach server" << std::endl;
-      //    std::exit(EXIT_FAILURE);
-      //});
-
-      waitset.value().attachEvent(*client, iox::popo::ClientEvent::RESPONSE_RECEIVED).or_else([](auto) {
+      waitset.value().attachState(*request_subscriber, iox::popo::SubscriberState::HAS_DATA).or_else([](auto) {
           std::cerr << "failed to attach server" << std::endl;
           std::exit(EXIT_FAILURE);
       });
+
     }
 }
 
@@ -91,10 +98,10 @@ bool TraceExecutorShmem::init(const char *ip, const short port,
         auto process = [&](iox::cxx::expected<const void*, iox::popo::ChunkReceiveResult> val) {
 
             auto responsePayload = val.value();
-            auto responseHeader = iox::popo::ResponseHeader::fromPayload(responsePayload);
-            SPDLOG_DEBUG("Received_reply {}", responseHeader->getSequenceId());
-            //if (responseHeader->getSequenceId() == expectedResponseSequenceId)
-            if (responseHeader->getSequenceId() == last_synchronized_local + 1)
+						auto header = static_cast<const int*>(iox::mepoo::ChunkHeader::fromUserPayload(responsePayload)->userHeader());
+            SPDLOG_DEBUG("Received_reply {}", *header);
+						int seq_id = *header;
+            if (seq_id == last_synchronized_local + 1)
             {
 
                 SPDLOG_INFO("Trace execution response received");
@@ -105,7 +112,7 @@ bool TraceExecutorShmem::init(const char *ip, const short port,
                     fb_protocol_message_response->message_as_FBTraceExecResponse();
 
                 last_synchronized_local++;
-                bool succ = results.try_enqueue(
+                bool succ = results.enqueue(
                     std::make_pair(
                       CudaTraceConverter::execResponseToTopApiCall(fb_trace_exec_response),
                       last_synchronized_local
@@ -118,45 +125,65 @@ bool TraceExecutorShmem::init(const char *ip, const short port,
                     1000000.0;
                 //std::cerr << d1 << std::endl;
                 this->serialize_total_time += d1;
-                client->releaseResponse(responsePayload);
+                request_subscriber->release(responsePayload);
             }
             else
             {
                 std::cout << "Got Response with outdated sequence ID! Expected = " << last_synchronized_local
-                          << "; Actual = " << responseHeader->getSequenceId() << "! -> skip" << std::endl;
+                          << "; Actual = " << seq_id << "! -> skip" << std::endl;
             }
         };
 
         while(true) {
 
-          auto notificationVector = waitset.value().wait();
+          auto val = request_subscriber->take();
 
-          SPDLOG_DEBUG("responses! {}", notificationVector.size());
+          if(val.has_error()) {
 
-          for (auto& notification : notificationVector)
-          {
+            if(val.get_error() == iox::popo::ChunkReceiveResult::NO_CHUNK_AVAILABLE) {
+              continue;
+            } else {
+              abort();
+            }
 
-              if(notification->doesOriginateFrom(client.get())) {
+          } else {
 
-                auto val = client->take();
-                if(val.has_error() && val.get_error() != iox::popo::ChunkReceiveResult::NO_CHUNK_AVAILABLE) {
-                  spdlog::error("Failure when polling messages, error {}", val.get_error());
-                }
-                while(!val.has_error()) {
-                  process(val);
-                  val = client->take();
-                  if(val.has_error() && val.get_error() != iox::popo::ChunkReceiveResult::NO_CHUNK_AVAILABLE) {
-                    spdlog::error("Failure when polling messages, error {}", val.get_error());
-                  }
-                }
-
-              } else {
-                spdlog::error("This should not have happened!");
-              }
+            SPDLOG_ERROR("poll responses!");
+            process(val);
 
           }
-          SPDLOG_DEBUG("responses done! {}", notificationVector.size());
+
         }
+        //while(true) {
+
+          //auto notificationVector = waitset.value().wait();
+
+          //SPDLOG_DEBUG("responses! {}", notificationVector.size());
+
+          //for (auto& notification : notificationVector)
+          //{
+
+          //    if(notification->doesOriginateFrom(client.get())) {
+
+          //      auto val = client->take();
+          //      if(val.has_error() && val.get_error() != iox::popo::ChunkReceiveResult::NO_CHUNK_AVAILABLE) {
+          //        spdlog::error("Failure when polling messages, error {}", val.get_error());
+          //      }
+          //      while(!val.has_error()) {
+          //        process(val);
+          //        val = client->take();
+          //        if(val.has_error() && val.get_error() != iox::popo::ChunkReceiveResult::NO_CHUNK_AVAILABLE) {
+          //          spdlog::error("Failure when polling messages, error {}", val.get_error());
+          //        }
+          //      }
+
+          //    } else {
+          //      spdlog::error("This should not have happened!");
+          //    }
+
+          //}
+          //SPDLOG_DEBUG("responses done! {}", notificationVector.size());
+        //}
       }
     };
     t.detach();
@@ -195,13 +222,16 @@ bool TraceExecutorShmem::send_only(CudaTrace &cuda_trace)
     //int64_t expectedResponseSequenceId = requestSequenceId;
     auto s1 = std::chrono::high_resolution_clock::now();
     // FIXME: what should be the alignment here?
-    client->loan(builder.GetSize(), 16)
+    request_publisher->loan(builder.GetSize(), 16, sizeof(int), alignof(int))
         .and_then([&, this](auto& requestPayload) {
 
 
-            auto requestHeader = iox::popo::RequestHeader::fromPayload(requestPayload);
+						auto header = static_cast<int*>(iox::mepoo::ChunkHeader::fromUserPayload(requestPayload)->userHeader());
+
+						(*header) = ++last_sent;
+            //auto requestHeader = iox::popo::RequestHeader::fromPayload(requestPayload);
             //requestHeader->setSequenceId(requestSequenceId);
-            requestHeader->setSequenceId(++last_sent);
+            //requestHeader->setSequenceId(++last_sent);
             //expectedResponseSequenceId = requestSequenceId;
             //requestSequenceId += 1;
 
@@ -209,12 +239,10 @@ bool TraceExecutorShmem::send_only(CudaTrace &cuda_trace)
 
             SPDLOG_DEBUG("Submit_request {}", last_sent - 1);
 
-            client->send(requestPayload).or_else(
-                [&](auto& error) { std::cout << "Could not send Request! Error: " << error << std::endl; });
-
+            request_publisher->publish(requestPayload);
         })
         .or_else([](auto& error) { std::cout << "Could not allocate Request! Error: " << error << std::endl; });
-    SPDLOG_INFO("Trace execution request sent");
+    SPDLOG_INFO("Trace execution request sent {}", this->serialize_total_time);
 
     cuda_trace.markSent();
     //// FIXME: merge implementation with synchronization
@@ -339,21 +367,22 @@ bool TraceExecutorShmem::synchronize(CudaTrace &cuda_trace)
     //int64_t expectedResponseSequenceId = requestSequenceId;
     auto s1 = std::chrono::high_resolution_clock::now();
     // FIXME: what should be the alignment here?
-    client->loan(builder.GetSize(), 16)
+    request_publisher->loan(builder.GetSize(), 16, sizeof(int), alignof(1))
         .and_then([&, this](auto& requestPayload) {
 
-            auto requestHeader = iox::popo::RequestHeader::fromPayload(requestPayload);
+						auto header = static_cast<int*>(iox::mepoo::ChunkHeader::fromUserPayload(requestPayload)->userHeader());
+
+						(*header) = ++last_sent;
+            //auto requestHeader = iox::popo::RequestHeader::fromPayload(requestPayload);
             //requestHeader->setSequenceId(requestSequenceId);
-            requestHeader->setSequenceId(++last_sent);
+            //requestHeader->setSequenceId(++last_sent);
             SPDLOG_DEBUG("Submit_request {}", last_sent - 1);
             //expectedResponseSequenceId = requestSequenceId;
             //requestSequenceId += 1;
 
             memcpy(requestPayload, builder.GetBufferPointer(), builder.GetSize());
 
-            client->send(requestPayload).or_else(
-                [&](auto& error) { std::cout << "Could not send Request! Error: " << error << std::endl; });
-
+            request_publisher->publish(requestPayload);
 
         })
         .or_else([](auto& error) { std::cout << "Could not allocate Request! Error: " << error << std::endl; });
@@ -405,7 +434,7 @@ bool TraceExecutorShmem::synchronize(CudaTrace &cuda_trace)
         results.wait_dequeue(cuda_api_call);
 
         last_synchronized = cuda_api_call.second;
-        SPDLOG_INFO("Synchronized, now position synchronized {}, last sent {}", last_synchronized, last_sent);
+        SPDLOG_INFO("Synchronized, now position synchronized {}, last sent {}, size {}", last_synchronized, last_sent, results.size_approx());
 
         //std::cerr << "Synchronize " << last_synchronized << " " << last_sent << std::endl;
 
@@ -442,25 +471,26 @@ bool TraceExecutorShmem::synchronize(CudaTrace &cuda_trace)
 
       // FIXME: this doesn't support the new algorithm that waits until we synchronize
 
+      abort();
       std::cerr << "WRONG" << std::endl;
       while(true) {
 
-        auto val = client->take();
+        //auto val = client->take();
 
-        if(val.has_error()) {
+        //if(val.has_error()) {
 
-          if(val.get_error() == iox::popo::ChunkReceiveResult::NO_CHUNK_AVAILABLE) {
-            continue;
-          } else {
-            abort();
-          }
+        //  if(val.get_error() == iox::popo::ChunkReceiveResult::NO_CHUNK_AVAILABLE) {
+        //    continue;
+        //  } else {
+        //    abort();
+        //  }
 
-        } else {
+        //} else {
 
-          //process(val);
-          break;
+        //  //process(val);
+        //  break;
 
-        }
+        //}
 
       }
 
@@ -507,15 +537,19 @@ bool TraceExecutorShmem::getDeviceAttributes() {
         CreateFBProtocolMessage(builder, FBMessage_FBTraceAttributeRequest,
                                 CreateFBTraceAttributeRequest(builder).Union());
     builder.Finish(attr_request);
-    SPDLOG_DEBUG("FBTraceAttributeRequest sent");
+    SPDLOG_DEBUG("FBTraceAttributeRequest sent {}", fmt::ptr(request_publisher.get()));
 
     // FIXME: Merge with other send functions
-    client->loan(builder.GetSize(), 16)
+    request_publisher->loan(builder.GetSize(), 16, sizeof(int), alignof(int))
         .and_then([&, this](auto& requestPayload) {
 
-            auto requestHeader = iox::popo::RequestHeader::fromPayload(requestPayload);
+						auto header = static_cast<int*>(iox::mepoo::ChunkHeader::fromUserPayload(requestPayload)->userHeader());
+
+						(*header) = ++last_sent;
+
+            //auto requestHeader = iox::popo::RequestHeader::fromPayload(requestPayload);
             //requestHeader->setSequenceId(requestSequenceId);
-            requestHeader->setSequenceId(++last_sent);
+            //requestHeader->setSequenceId(++last_sent);
             //expectedResponseSequenceId = requestSequenceId;
             //requestSequenceId += 1;
 
@@ -523,8 +557,7 @@ bool TraceExecutorShmem::getDeviceAttributes() {
 
             SPDLOG_INFO("Submit_request {}", last_sent - 1);
 
-            client->send(requestPayload).or_else(
-                [&](auto& error) { std::cout << "Could not send Request! Error: " << error << std::endl; });
+            request_publisher->publish(requestPayload);
 
         })
         .or_else([](auto& error) { std::cout << "Could not allocate Request! Error: " << error << std::endl; });
@@ -538,9 +571,9 @@ bool TraceExecutorShmem::getDeviceAttributes() {
     auto notificationVector = waitset.value().wait();
     for (auto& notification : notificationVector)
     {
-      if(notification->doesOriginateFrom(client.get())) {
+      if(notification->doesOriginateFrom(request_subscriber.get())) {
 
-        auto val = client->take();
+        auto val = request_subscriber->take();
         if(!val) {
           spdlog::error("Failed to receive the response on device attributes!");
           return false;
@@ -563,7 +596,8 @@ bool TraceExecutorShmem::getDeviceAttributes() {
             this->device_attributes[dev_attr] = value;
         }
 
-        client->releaseResponse(responsePayload);
+        //client->releaseResponse(responsePayload);
+				request_subscriber->release(responsePayload);
 
         last_synchronized++;
 
