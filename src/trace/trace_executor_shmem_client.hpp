@@ -6,6 +6,8 @@
 #include "trace_executor.hpp"
 #include "shmem/mempool.hpp"
 
+#include "readerwriterqueue.h"
+
 #include <iceoryx_posh/popo/wait_set.hpp>
 #include <iceoryx_posh/internal/runtime/posh_runtime_impl.hpp>
 #include <iceoryx_posh/popo/untyped_client.hpp>
@@ -36,6 +38,10 @@ class TraceExecutorShmem : public TraceExecutor {
     bool getDeviceAttributes();
 
   public:
+
+    moodycamel::BlockingReaderWriterQueue<std::pair<std::shared_ptr<AbstractCudaApiCall>, int>> results;
+
+    double serialize_total_time = 0;
 
     MemPool _pool;
     TraceExecutorShmem();

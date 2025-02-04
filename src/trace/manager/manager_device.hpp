@@ -149,6 +149,8 @@ struct ShmemServer {
   bool _process_remainder();
   double _sum = 0;
 
+  double serialization_time = 0;
+
   std::optional<iox::posix::SignalGuard> sigint;
   std::optional<iox::posix::SignalGuard> sigterm;
 };

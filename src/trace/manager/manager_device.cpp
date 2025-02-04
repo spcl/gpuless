@@ -26,6 +26,8 @@
 #include "iceoryx_posh/popo/subscriber.hpp"
 #include "manager_device.hpp"
 
+double serialization_time = 0.0;
+
 extern const int BACKLOG;
 
 static bool g_device_initialized = false;
@@ -85,6 +87,8 @@ handle_execute_request(const gpuless::FBProtocolMessage *msg, int socket_fd) {
   auto &cuda_trace = getCudaTrace();
   auto &vdev = getCudaVirtualDevice();
 
+  auto s = std::chrono::high_resolution_clock::now();
+
   // load new modules
   auto new_modules = msg->message_as_FBTraceExecRequest()->new_modules();
   SPDLOG_INFO("Loading {} new modules", new_modules->size());
@@ -115,6 +119,13 @@ handle_execute_request(const gpuless::FBProtocolMessage *msg, int socket_fd) {
   auto call_stack = gpuless::CudaTraceConverter::execRequestToTrace(p);
   cuda_trace.setCallStack(call_stack);
   SPDLOG_INFO("Execution trace of size {}", call_stack.size());
+
+  auto e = std::chrono::high_resolution_clock::now();
+  auto d1 =
+      std::chrono::duration_cast<std::chrono::microseconds>(e - s).count() /
+      1000000.0;
+
+  serialization_time += d1;
 
   auto &instance = ExecutionStatus::instance();
   auto [begin, end] = cuda_trace.callStack();
@@ -162,6 +173,7 @@ handle_execute_request(const gpuless::FBProtocolMessage *msg, int socket_fd) {
   g_sync_counter++;
   SPDLOG_INFO("Number of synchronizations: {}", g_sync_counter);
 
+  s = std::chrono::high_resolution_clock::now();
   flatbuffers::FlatBufferBuilder builder;
   auto top = cuda_trace.historyTop()->fbSerialize(builder);
 
@@ -171,6 +183,12 @@ handle_execute_request(const gpuless::FBProtocolMessage *msg, int socket_fd) {
       builder, gpuless::FBMessage_FBTraceExecResponse,
       fb_trace_exec_response.Union());
   builder.Finish(fb_protocol_message);
+
+  e = std::chrono::high_resolution_clock::now();
+  d1 =
+      std::chrono::duration_cast<std::chrono::microseconds>(e - s).count() /
+      1000000.0;
+  serialization_time += d1;
 
   instance.save(-1);
 
@@ -230,6 +248,7 @@ finish_trace_execution(int last_idx) {
   g_sync_counter++;
   SPDLOG_INFO("Number of synchronizations: {}", g_sync_counter);
 
+  auto s = std::chrono::high_resolution_clock::now();
   flatbuffers::FlatBufferBuilder builder;
   auto top = cuda_trace.historyTop()->fbSerialize(builder);
 
@@ -239,6 +258,12 @@ finish_trace_execution(int last_idx) {
       builder, gpuless::FBMessage_FBTraceExecResponse,
       fb_trace_exec_response.Union());
   builder.Finish(fb_protocol_message);
+
+  auto e = std::chrono::high_resolution_clock::now();
+  auto d1 =
+      std::chrono::duration_cast<std::chrono::microseconds>(e - s).count() /
+      1000000.0;
+  serialization_time += d1;
 
   instance.save(-1);
 
@@ -263,6 +288,8 @@ void handle_request(int socket_fd) {
       SPDLOG_ERROR("Invalid request type");
       return;
     }
+
+    std::cerr << "Finished " << serialization_time << std::endl;
   }
 }
 
@@ -323,12 +350,15 @@ bool ShmemServer::_process_client(const void *requestPayload) {
   // std::cout << APP_NAME << " Got Request: " << request->augend << " + " <<
   // request->addend << std::endl;
 
-  // auto s = std::chrono::high_resolution_clock::now();
+  auto s = std::chrono::high_resolution_clock::now();
   // handle_request(s_new);
   auto msg = gpuless::GetFBProtocolMessage(requestPayload);
-  // auto e1 = std::chrono::high_resolution_clock::now();
+  auto e1 = std::chrono::high_resolution_clock::now();
 
-  // std::cerr << "Request" << std::endl;
+   auto d1 =
+       std::chrono::duration_cast<std::chrono::microseconds>(e1 - s).count() /
+       1000000.0;
+  std::cerr << "Request " << " " << d1 << std::endl;
 
   // auto& instance = ExecutionStatus::status();
 
@@ -483,7 +513,7 @@ void ShmemServer::loop_wait(const char *user_name) {
         }
 
         SPDLOG_INFO("Received {} requests", idx);
-        MemoryStore::get_instance().print_stats();
+        //MemoryStore::get_instance().print_stats();
 
       } else {
 
