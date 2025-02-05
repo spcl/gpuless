@@ -542,7 +542,8 @@ extern "C" CUresult CUDAAPI cuMemcpyDtoH_v2(void *dstHost,
 
 extern "C" CUresult CUDAAPI cuGetProcAddress(const char *symbol, void **pfn,
                                              int cudaVersion,
-                                             cuuint64_t flags) {
+                                             cuuint64_t flags,
+    CUdriverProcAddressQueryResult *symbolStatus) {
     static auto real_func =
         (decltype(&cuGetProcAddress))real_dlsym(RTLD_NEXT, __func__);
     // std::cerr << "cuGetProcAddress(" << symbol << ")" << std::endl <<
@@ -560,7 +561,7 @@ extern "C" CUresult CUDAAPI cuGetProcAddress(const char *symbol, void **pfn,
     LINK_CU_FUNCTION(symbol, cuModuleUnload);
     LINK_CU_FUNCTION(symbol, cuModuleGetGlobal);
 
-    return real_func(symbol, pfn, cudaVersion, flags);
+    return real_func(symbol, pfn, cudaVersion, flags, symbolStatus);
 }
 
 extern "C" cudnnStatus_t

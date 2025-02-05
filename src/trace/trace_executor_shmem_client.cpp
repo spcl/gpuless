@@ -31,6 +31,8 @@ iox::runtime::PoshRuntime& runtime_factory(iox::cxx::optional<const iox::Runtime
 
 TraceExecutorShmem::TraceExecutorShmem()
 {
+    spdlog::set_level(spdlog::level::trace);
+    spdlog::set_pattern("[%H:%M:%S:%e:%f] %v");
     // This is useful when we do not have executor, i.e., we just do LD_PRELOAD on existing app.
     const char* app_name = std::getenv("SHMEM_APP_NAME");
     const char* user_name = std::getenv("CONTAINER_NAME");

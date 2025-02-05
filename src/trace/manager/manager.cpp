@@ -214,6 +214,7 @@ int main(int argc, char **argv) {
 
     // load log level from env variable SPDLOG_LEVEL
     spdlog::cfg::load_env_levels();
+    spdlog::set_level(spdlog::level::trace);
 
     // set manager ip if given as environment variable
     char *manager_ip_env = std::getenv("MANAGER_IP");

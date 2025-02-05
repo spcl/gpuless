@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.17)
 project(gpuless)
 
 enable_language(CUDA)
-find_package(CUDAToolkit 11.4)
+find_package(CUDAToolkit 12.4)
 
 set(CUDNN_DIR "" CACHE STRING "")
 
@@ -62,7 +62,7 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17 -g -Wall -Wextra -Wno-unused-
 
 set(CMAKE_CUDA_STANDARD 17)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
-set(CMAKE_CUDA_ARCHITECTURES "80")
+set(CMAKE_CUDA_ARCHITECTURES "90")
 set(CMAKE_CUDA_RUNTIME_LIBRARY Shared)
 
 # build flatbuffer schemas with external Makefile

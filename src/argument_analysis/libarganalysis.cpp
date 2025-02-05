@@ -819,14 +819,15 @@ cublasLtMatmulPreferenceDestroy(cublasLtMatmulPreference_t pref) {
 
 extern "C" CUresult CUDAAPI cuGetProcAddress(const char *symbol, void **pfn,
                                              int cudaVersion,
-                                             cuuint64_t flags) {
+                                             cuuint64_t flags,
+                                             CUdriverProcAddressQueryResult *symbolStatus) {
     static auto real_func =
         (decltype(&cuGetProcAddress))real_dlsym(RTLD_NEXT, __func__);
 
     LINK_CU_FUNCTION(symbol, cuLaunchKernel);
     LINK_CU_FUNCTION(symbol, cuModuleGetFunction);
 
-    return real_func(symbol, pfn, cudaVersion, flags);
+    return real_func(symbol, pfn, cudaVersion, flags, symbolStatus);
 }
 }
 

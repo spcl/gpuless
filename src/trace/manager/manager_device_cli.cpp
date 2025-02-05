@@ -6,10 +6,13 @@
 
 #include "manager_device.hpp"
 
+#include <spdlog/spdlog.h>
+
 extern const int BACKLOG = 5;
 
 int main(int argc, char **argv) {
 
+  spdlog::set_level(spdlog::level::trace);
   std::string device{argv[1]};
   std::string manager_type{argv[2]};
 

@@ -5,6 +5,7 @@ void CudaVirtualDevice::initRealDevice() {
     if (this->initialized) {
         return;
     }
+    spdlog::set_level(spdlog::level::trace);
 
     SPDLOG_INFO("CudaVirtualDevice: initializing real device");
     checkCudaErrors(cuInit(0));
@@ -15,10 +16,14 @@ void CudaVirtualDevice::initRealDevice() {
 
     size_t n_attributes = CU_DEVICE_ATTRIBUTE_MAX;
     this->device_attributes.resize(n_attributes);
-    for (size_t i = 1; i < n_attributes; i++) {
-        checkCudaErrors(cuDeviceGetAttribute(&this->device_attributes[i],
-                                             static_cast<CUdevice_attribute>(i),
-                                             this->device));
+    for (size_t i = 0; i < n_attributes; i++) {
+        CUresult result = cuDeviceGetAttribute(&this->device_attributes[i],
+                                            static_cast<CUdevice_attribute>(i),
+                                            this->device);
+        if (result != CUDA_SUCCESS) {
+            SPDLOG_WARN("Failed to get device attribute {}: {}", i, result);
+            continue;  // Skip unsupported attributes
+        }
         SPDLOG_TRACE("Device attribute {}: {}", i, this->device_attributes[i]);
     }
 

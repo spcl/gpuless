@@ -849,7 +849,7 @@ CUresult cuDevicePrimaryCtxGetState(CUdevice dev, unsigned int *flags,
 }
 
 CUresult cuGetProcAddress(const char *symbol, void **pfn, int cudaVersion,
-                          cuuint64_t flags) {
+                          cuuint64_t flags, CUdriverProcAddressQueryResult *symbolStatus) {
     hijackInit();
     SPDLOG_TRACE("{}({}) [pid={}]", __func__, symbol, getpid());
 
@@ -864,17 +864,26 @@ CUresult cuGetProcAddress(const char *symbol, void **pfn, int cudaVersion,
     LINK_CU_FUNCTION(symbol, cuDevicePrimaryCtxGetState);
 
     static auto real = GET_REAL_FUNCTION(cuGetProcAddress);
-    return real(symbol, pfn, cudaVersion, flags);
+    return real(symbol, pfn, cudaVersion, flags, symbolStatus);
 }
 
 void *dlsym(void *handle, const char *symbol) {
     SPDLOG_TRACE("{}({}) [pid={}]", __func__, symbol, getpid());
 
+    // check if handle is null
+    if (handle == nullptr) {
+        SPDLOG_TRACE("Handle is null, symbol {}", symbol);
+    }
+
+    SPDLOG_TRACE("Checking if symbol {} is a CUDA driver symbol", symbol);
     // early out if not a CUDA driver symbol
     if (strncmp(symbol, "cu", 2) != 0) {
+        SPDLOG_TRACE("Symbol {} is not a CUDA driver symbol", symbol);
         auto p = (real_dlsym(handle, symbol));
         return p;
     }
+
+    SPDLOG_TRACE("Intercepting symbol: {}", symbol);
 
     LINK_CU_FUNCTION_DLSYM(symbol, cuGetProcAddress);
     LINK_CU_FUNCTION_DLSYM(symbol, cuDevicePrimaryCtxRelease_v2);
@@ -886,6 +895,9 @@ void *dlsym(void *handle, const char *symbol) {
     LINK_CU_FUNCTION_DLSYM(symbol, cuDriverGetVersion);
     LINK_CU_FUNCTION_DLSYM(symbol, cuDevicePrimaryCtxGetState);
 
-    return real_dlsym(handle, symbol);
+    SPDLOG_TRACE("Calling real dlsym for symbol: {}", symbol);
+    void* result = real_dlsym(handle, symbol);
+    SPDLOG_TRACE("Final return for symbol: {} -> {}", symbol, result);
+    return result;
 }
 }
