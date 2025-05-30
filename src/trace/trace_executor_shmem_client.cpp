@@ -134,56 +134,56 @@ bool TraceExecutorShmem::init(const char *ip, const short port,
             }
         };
 
-        while(true) {
-
-          auto val = request_subscriber->take();
-
-          if(val.has_error()) {
-
-            if(val.get_error() == iox::popo::ChunkReceiveResult::NO_CHUNK_AVAILABLE) {
-              continue;
-            } else {
-              abort();
-            }
-
-          } else {
-
-            SPDLOG_ERROR("poll responses!");
-            process(val);
-
-          }
-
-        }
         //while(true) {
 
-          //auto notificationVector = waitset.value().wait();
+        //  auto val = request_subscriber->take();
 
-          //SPDLOG_DEBUG("responses! {}", notificationVector.size());
+        //  if(val.has_error()) {
 
-          //for (auto& notification : notificationVector)
-          //{
+        //    if(val.get_error() == iox::popo::ChunkReceiveResult::NO_CHUNK_AVAILABLE) {
+        //      continue;
+        //    } else {
+        //      abort();
+        //    }
 
-          //    if(notification->doesOriginateFrom(client.get())) {
+        //  } else {
 
-          //      auto val = client->take();
-          //      if(val.has_error() && val.get_error() != iox::popo::ChunkReceiveResult::NO_CHUNK_AVAILABLE) {
-          //        spdlog::error("Failure when polling messages, error {}", val.get_error());
-          //      }
-          //      while(!val.has_error()) {
-          //        process(val);
-          //        val = client->take();
-          //        if(val.has_error() && val.get_error() != iox::popo::ChunkReceiveResult::NO_CHUNK_AVAILABLE) {
-          //          spdlog::error("Failure when polling messages, error {}", val.get_error());
-          //        }
-          //      }
+        //    SPDLOG_ERROR("poll responses!");
+        //    process(val);
 
-          //    } else {
-          //      spdlog::error("This should not have happened!");
-          //    }
+        //  }
 
-          //}
-          //SPDLOG_DEBUG("responses done! {}", notificationVector.size());
         //}
+        while(true) {
+
+          auto notificationVector = waitset.value().wait();
+
+          SPDLOG_DEBUG("responses! {}", notificationVector.size());
+
+          for (auto& notification : notificationVector)
+          {
+
+              if(notification->doesOriginateFrom(request_subscriber.get())) {
+
+                auto val = request_subscriber->take();
+                if(val.has_error() && val.get_error() != iox::popo::ChunkReceiveResult::NO_CHUNK_AVAILABLE) {
+                  spdlog::error("Failure when polling messages, error {}", val.get_error());
+                }
+                while(!val.has_error()) {
+                  process(val);
+                  val = request_subscriber->take();
+                  if(val.has_error() && val.get_error() != iox::popo::ChunkReceiveResult::NO_CHUNK_AVAILABLE) {
+                    spdlog::error("Failure when polling messages, error {}", val.get_error());
+                  }
+                }
+
+              } else {
+                spdlog::error("This should not have happened!");
+              }
+
+          }
+          SPDLOG_DEBUG("responses done! {}", notificationVector.size());
+        }
       }
     };
     t.detach();
@@ -237,7 +237,7 @@ bool TraceExecutorShmem::send_only(CudaTrace &cuda_trace)
 
             memcpy(requestPayload, builder.GetBufferPointer(), builder.GetSize());
 
-            SPDLOG_DEBUG("Submit_request {}", last_sent - 1);
+            SPDLOG_DEBUG("Submit_request {}, size {}", last_sent - 1, builder.GetSize());
 
             request_publisher->publish(requestPayload);
         })

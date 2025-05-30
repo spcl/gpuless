@@ -13,6 +13,8 @@
 
 namespace gpuless {
 
+class TraceExecutor;
+
 class CudaTrace {
   private:
     std::vector<std::shared_ptr<AbstractCudaApiCall>> synchronized_history_;
@@ -30,6 +32,8 @@ class CudaTrace {
     size_t already_sent = 0;
 
   public:
+
+    gpuless::TraceExecutor* executor;
 
     typedef std::vector<std::shared_ptr<AbstractCudaApiCall>>::iterator it_t;
 

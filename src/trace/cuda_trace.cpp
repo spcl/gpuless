@@ -1,4 +1,5 @@
 #include "cuda_trace.hpp"
+#include "libgpuless.hpp"
 
 #include <utility>
 
@@ -9,6 +10,12 @@ CudaTrace::CudaTrace() = default;
 void CudaTrace::record(
     const std::shared_ptr<AbstractCudaApiCall> &cudaApiCall) {
     this->call_stack_.push_back(cudaApiCall);
+
+    //if(executor) { //&& this->call_stack_.size() % 10 == 0) {
+    if(executor && this->call_stack_.size() % 10 == 0) {
+      spdlog::error("early send on size {}", this->call_stack_.size());
+      executor->send_only(*this);
+    }
 }
 
 void CudaTrace::markSent()
@@ -27,17 +34,18 @@ void CudaTrace::markSynchronized(int64_t positions)
               std::back_inserter(this->synchronized_history_));
   }
 
-  SPDLOG_INFO("Cuda trace history size: {}",
-              this->synchronized_history_.size());
 
   // clear the current trace
   if(positions >= 0) {
+    SPDLOG_INFO("Cuda trace history size: {}, already sent {}, removing {} positions.", this->synchronized_history_.size(), already_sent, positions);
     this->call_stack_.erase(this->call_stack_.begin(), this->call_stack_.begin() + positions);
+    already_sent -= positions;
   } else {
+    SPDLOG_INFO("Cuda trace history size: {}, clearing everything.", this->synchronized_history_.size());
     this->call_stack_.clear();
+    already_sent = 0;
   }
 
-  already_sent = 0;
 }
 
 const std::shared_ptr<AbstractCudaApiCall> &CudaTrace::historyTop() {

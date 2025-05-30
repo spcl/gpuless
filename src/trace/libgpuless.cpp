@@ -173,6 +173,8 @@ CudaTrace &getCudaTrace() {
       if(!getCubinAnalyzerELF().analyze(files)) {
         std::exit(EXIT_FAILURE);
       }
+
+      cuda_trace.executor = getTraceExecutor().get();
     }
 #else
     if (!getCubinAnalyzer().isInitialized()) {
@@ -536,6 +538,10 @@ cudaError_t cudaLaunchKernel(const void *func, dim3 gridDim, dim3 blockDim,
     getCudaTrace().record(std::make_shared<CudaLaunchKernel>(
         symbol, required_cuda_modules, required_function_symbols, func, gridDim,
         blockDim, sharedMem, stream, paramBuffers, paramInfos));
+
+    //getTraceExecutor()->send_only(getCudaTrace());
+    //getTraceExecutor()->synchronize(getCudaTrace());
+
     return cudaSuccess;
 }
 
