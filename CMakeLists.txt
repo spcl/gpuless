@@ -30,6 +30,7 @@ option(SPDLOG_LEVEL_OFF "Set the spdlog level to off" OFF)
 #    add_compile_definitions(SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_OFF)
 #    message("Set SPDLOG_LEVEL_OFF")
 #endif()
+add_compile_definitions(SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_OFF)
 
 if(BUILD_SHMEM)
   find_package(iceoryx_posh CONFIG REQUIRED)
