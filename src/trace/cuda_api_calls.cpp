@@ -220,7 +220,7 @@ CudaMemcpyAsyncH2D::CudaMemcpyAsyncH2D(void *dst, const void *src, size_t size,
 
 CudaMemcpyAsyncH2D::CudaMemcpyAsyncH2D(void *dst, const void *src, size_t size,
                                        cudaStream_t stream, std::string shared_name)
-    : dst(dst), src(src), size(size), stream(stream), buffer(size), shared_name(shared_name) {}
+    : dst(dst), src(src), size(size), stream(stream), shared_name(shared_name) {}
 
 uint64_t CudaMemcpyAsyncH2D::executeNative(CudaVirtualDevice &vdev) {
     static auto real =
