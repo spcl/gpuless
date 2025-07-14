@@ -238,16 +238,15 @@ uint64_t gpuless::CudnnCreateConvolutionDescriptor::executeNative(
     CudaVirtualDevice &vdev) {
     static auto real = (decltype(&cudnnCreateConvolutionDescriptor))real_dlsym(
         RTLD_NEXT, "cudnnCreateConvolutionDescriptor");
-    spdlog::error("exec, id {}, size {}", this->virtual_cd + 1, vdev.cudnn_convolution_descriptor_virtual_to_real.size());
+    //SPDLOG_INFO("exec, id {}, size {}", this->virtual_cd + 1, vdev.cudnn_convolution_descriptor_virtual_to_real.size());
     if (vdev.cudnn_convolution_descriptor_virtual_to_real.size() <
         this->virtual_cd + 1) {
         vdev.cudnn_convolution_descriptor_virtual_to_real.resize(
             this->virtual_cd + 1);
     }
-    spdlog::error("start exec, size {}", vdev.cudnn_convolution_descriptor_virtual_to_real.size());
+    //SPDLOG_INFO("start exec, size {}", vdev.cudnn_convolution_descriptor_virtual_to_real.size());
     auto v = real(
         &vdev.cudnn_convolution_descriptor_virtual_to_real[this->virtual_cd]);
-    spdlog::error("done");
     return v;
 }
 

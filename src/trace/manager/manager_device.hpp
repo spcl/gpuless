@@ -10,7 +10,7 @@
 #include <iceoryx_posh/popo/untyped_publisher.hpp>
 #include <iceoryx_posh/popo/untyped_subscriber.hpp>
 #include <iceoryx_posh/popo/wait_set.hpp>
-#include <iceoryx_hoofs/posix_wrapper/signal_watcher.hpp>
+#include <iox/signal_watcher.hpp>
 #include <spdlog/spdlog.h>
 
 void manage_device(const std::string& device, uint16_t port);
@@ -153,8 +153,8 @@ struct ShmemServer {
 
   double serialization_time = 0;
 
-  std::optional<iox::posix::SignalGuard> sigint;
-  std::optional<iox::posix::SignalGuard> sigterm;
+  std::optional<iox::SignalGuard> sigint;
+  std::optional<iox::SignalGuard> sigterm;
 };
 
 #endif // __MANAGER_DEVICE_HPP__

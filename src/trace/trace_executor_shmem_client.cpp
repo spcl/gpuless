@@ -46,13 +46,13 @@ TraceExecutorShmem::TraceExecutorShmem()
       runtime_factory_impl(nullptr, this);
 
       iox::runtime::PoshRuntime::initRuntime(
-      iox::RuntimeName_t{iox::cxx::TruncateToCapacity_t{}, app_name}
+      iox::RuntimeName_t{iox::TruncateToCapacity_t{}, app_name}
       );
     }
 
     request_publisher.reset(new iox::popo::UntypedPublisher({
         iox::capro::ServiceDescription{
-            iox::RuntimeName_t{iox::cxx::TruncateToCapacity_t{}, user_name},
+            iox::RuntimeName_t{iox::TruncateToCapacity_t{}, user_name},
             "Gpuless",
             "Request"
         }
@@ -60,7 +60,7 @@ TraceExecutorShmem::TraceExecutorShmem()
 
     request_subscriber.reset(new iox::popo::UntypedSubscriber({
         iox::capro::ServiceDescription{
-            iox::RuntimeName_t{iox::cxx::TruncateToCapacity_t{}, user_name},
+            iox::RuntimeName_t{iox::TruncateToCapacity_t{}, user_name},
             "Gpuless",
             "Response"
         }
@@ -199,7 +199,7 @@ bool TraceExecutorShmem::deallocate() {
 bool TraceExecutorShmem::send_only(CudaTrace &cuda_trace)
 {
   // FIXME: single implementation with synchronize
-    auto s = std::chrono::high_resolution_clock::now();
+    //auto s = std::chrono::high_resolution_clock::now();
 
     this->synchronize_counter_++;
     //SPDLOG_INFO(
@@ -311,7 +311,7 @@ bool TraceExecutorShmem::send_only(CudaTrace &cuda_trace)
     //last_synchronized = cuda_api_call.second;
     //SPDLOG_INFO("Opportunistic sync, now position synchronized {}", last_synchronized);
 
-    std::cerr << "Previous synchronization point " << prev_synchronization << " new one " << last_synchronized << std::endl;
+    //std::cerr << "Previous synchronization point " << prev_synchronization << " new one " << last_synchronized << std::endl;
     int64_t synchronized_calls = last_synchronized - prev_synchronization;
     if(synchronized_calls > 0) {
 
@@ -336,7 +336,11 @@ bool TraceExecutorShmem::send_only(CudaTrace &cuda_trace)
       }
     }
 
-    std::cerr << "send is done. waitset? " << std::endl;
+    //auto f = std::chrono::high_resolution_clock::now();
+    //auto d3 =
+    //    std::chrono::duration_cast<std::chrono::microseconds>(f - s).count() /
+    //    1000.0;
+    //std::cerr << "send is done. waitset? " << d3 << std::endl;
 
     return true;
 }

@@ -297,7 +297,7 @@ void handle_request(int socket_fd) {
 
 void ShmemServer::setup(const std::string app_name) {
   iox::runtime::PoshRuntime::initRuntime(
-      iox::RuntimeName_t{iox::cxx::TruncateToCapacity_t{}, app_name});
+      iox::RuntimeName_t{iox::TruncateToCapacity_t{}, app_name.c_str()});
 }
 
 void *ShmemServer::take() {
@@ -428,30 +428,30 @@ bool SigHandler::quit = false;
 void ShmemServer::loop_wait(const char *user_name) {
 
   client_publisher.reset(new iox::popo::UntypedPublisher(
-      {iox::RuntimeName_t{iox::cxx::TruncateToCapacity_t{}, user_name},
+      {iox::RuntimeName_t{iox::TruncateToCapacity_t{}, user_name},
        "Gpuless", "Response"}));
 
   client_subscriber.reset(new iox::popo::UntypedSubscriber(
-      {iox::RuntimeName_t{iox::cxx::TruncateToCapacity_t{}, user_name},
+      {iox::RuntimeName_t{iox::TruncateToCapacity_t{}, user_name},
        "Gpuless", "Request"}));
 
   iox::popo::Publisher<int> orchestrator_send{iox::capro::ServiceDescription{
-      iox::RuntimeName_t{iox::cxx::TruncateToCapacity_t{},
-                         fmt::format("gpuless-{}", user_name)},
+      iox::RuntimeName_t{iox::TruncateToCapacity_t{},
+                         fmt::format("gpuless-{}", user_name).c_str()},
       "Orchestrator", "Send"}};
 
   iox::popo::Subscriber<int> orchestrator_recv{iox::capro::ServiceDescription{
-      iox::RuntimeName_t{iox::cxx::TruncateToCapacity_t{},
-                         fmt::format("gpuless-{}", user_name)},
+      iox::RuntimeName_t{iox::TruncateToCapacity_t{},
+                         fmt::format("gpuless-{}", user_name).c_str()},
       "Orchestrator", "Receive"}};
 
   iox::popo::WaitSet<> waitset;
 
   SigHandler::waitset_ptr = &waitset;
-  sigint.emplace(iox::posix::registerSignalHandler(iox::posix::Signal::INT,
-                                                   SigHandler::sigHandler));
-  sigterm.emplace(iox::posix::registerSignalHandler(iox::posix::Signal::TERM,
-                                                    SigHandler::sigHandler));
+  sigint.emplace(iox::registerSignalHandler(iox::PosixSignal::INT,
+                                                   SigHandler::sigHandler).expect(""));
+  sigterm.emplace(iox::registerSignalHandler(iox::PosixSignal::TERM,
+                                                    SigHandler::sigHandler).expect(""));
 
   waitset.attachState(*client_subscriber, iox::popo::SubscriberState::HAS_DATA)
       .or_else([](auto) {
@@ -489,7 +489,7 @@ void ShmemServer::loop_wait(const char *user_name) {
         while (!no_more) {
 
           client_subscriber->take()
-              .and_then([&](auto &requestPayload) mutable {
+              .and_then([&](auto &requestPayload) {
                 ++idx;
 
                 auto new_header = static_cast<const int*>(iox::mepoo::ChunkHeader::fromUserPayload(requestPayload)->userHeader());
@@ -572,7 +572,7 @@ void ShmemServer::loop(const char *user_name) {
   //     "Gpuless", "Client"}));
   abort();
   double sum = 0;
-  while (!iox::posix::hasTerminationRequested()) {
+  while (!iox::hasTerminationRequested()) {
 
     //server->take().and_then(
     //    [&](auto &requestPayload) { _process_client(requestPayload); });
