@@ -358,7 +358,6 @@ bool ShmemServer::_process_client(const void *requestPayload) {
    auto d1 =
        std::chrono::duration_cast<std::chrono::microseconds>(e1 - s).count() /
        1000000.0;
-  std::cerr << "Request " << " " << d1 << std::endl;
 
   // auto& instance = ExecutionStatus::status();
 
