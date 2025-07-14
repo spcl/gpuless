@@ -528,12 +528,11 @@ bool TraceExecutorShmem::synchronize(CudaTrace &cuda_trace)
     SPDLOG_INFO(
         "TraceExecutorTcp::synchronize() successful [t={}s, total_time={}s]", d,
         this->synchronize_total_time_);
-    std::cerr << "Synchronize succesful " << serialize_total_time << std::endl;
     return true;
 }
 
 bool TraceExecutorShmem::getDeviceAttributes() {
-    SPDLOG_INFO("TraceExecutorTcp::getDeviceAttributes()");
+    SPDLOG_INFO("TraceExecutorShmem::getDeviceAttributes()");
 
 
     flatbuffers::FlatBufferBuilder builder;
