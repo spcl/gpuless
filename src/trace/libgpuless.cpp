@@ -566,6 +566,7 @@ cudaError_t cudaThreadSynchronize(void) {
     hijackInit();
     HIJACK_FN_PROLOGUE();
     getCudaTrace().record(std::make_shared<CudaDeviceSynchronize>());
+    getTraceExecutor()->synchronize(getCudaTrace());
     return cudaSuccess;
 }
 
@@ -573,6 +574,7 @@ cudaError_t cudaDeviceSynchronize(void) {
     hijackInit();
     HIJACK_FN_PROLOGUE();
     getCudaTrace().record(std::make_shared<CudaDeviceSynchronize>());
+    getTraceExecutor()->synchronize(getCudaTrace());
     return cudaSuccess;
 }
 
