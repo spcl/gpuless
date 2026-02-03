@@ -13,7 +13,7 @@ void CudaTrace::record(
 
     //if(executor) { //&& this->call_stack_.size() % 10 == 0) {
     if(executor && this->call_stack_.size() % 50 == 0) {
-      spdlog::error("early send on size {}", this->call_stack_.size());
+      //spdlog::error("early send on size {}", this->call_stack_.size());
       executor->send_only(*this);
     }
 }
