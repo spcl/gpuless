@@ -11,9 +11,7 @@ void CudaTrace::record(
     const std::shared_ptr<AbstractCudaApiCall> &cudaApiCall) {
     this->call_stack_.push_back(cudaApiCall);
 
-    //if(executor) { //&& this->call_stack_.size() % 10 == 0) {
-    if(executor && this->call_stack_.size() % 50 == 0) {
-      //spdlog::error("early send on size {}", this->call_stack_.size());
+    if(executor && this->sizeCallStackNotSent() % 50 == 0) {
       executor->send_only(*this);
     }
 }
@@ -68,6 +66,11 @@ std::tuple<CudaTrace::it_t, CudaTrace::it_t> CudaTrace::callStack()
 size_t CudaTrace::sizeCallStack()
 {
   return this->call_stack_.size();
+}
+
+size_t CudaTrace::sizeCallStackNotSent()
+{
+  return this->call_stack_.size() - already_sent;
 }
 
 std::tuple<CudaTrace::it_t, CudaTrace::it_t> CudaTrace::fullCallStack()
