@@ -5,8 +5,9 @@
 
 #include "trace_executor.hpp"
 #include "shmem/mempool.hpp"
-
 #include "readerwriterqueue.h"
+
+#include <mignificient/ipc/config.hpp>
 
 #include <iceoryx_posh/popo/wait_set.hpp>
 #include <iceoryx_posh/internal/runtime/posh_runtime_impl.hpp>
@@ -14,6 +15,10 @@
 #include <iceoryx_posh/popo/untyped_subscriber.hpp>
 #include <iceoryx_posh/popo/untyped_publisher.hpp>
 #include <iceoryx_hoofs/cxx/optional.hpp>
+
+#ifdef MIGNIFICIENT_WITH_ICEORYX2
+#include <iox2/iceoryx2.hpp>
+#endif
 
 namespace gpuless {
 
@@ -31,17 +36,50 @@ class TraceExecutorShmem : public TraceExecutor {
     std::unique_ptr<iox::popo::UntypedSubscriber> request_subscriber;
     std::optional<iox::popo::WaitSet<>> waitset;
 
-    bool wait_poll;
+#ifdef MIGNIFICIENT_WITH_ICEORYX2
+    // iceoryx2 node and communication objects
+    //
+    std::optional<iox2::Node<iox2::ServiceType::Ipc>> iox2_node;
+
+    std::optional<iox2::PortFactoryEvent<iox2::ServiceType::Ipc>> iox2_event_notifier;
+    std::optional<iox2::PortFactoryEvent<iox2::ServiceType::Ipc>> iox2_event_listener;
+    std::optional<iox2::Notifier<iox2::ServiceType::Ipc>> iox2_request_notifier;
+    std::optional<iox2::Listener<iox2::ServiceType::Ipc>> iox2_response_listener;
+
+    std::optional<iox2::Publisher<iox2::ServiceType::Ipc, iox2::bb::Slice<uint8_t>, int>> iox2_request_publisher;
+    std::optional<iox2::Subscriber<iox2::ServiceType::Ipc, iox2::bb::Slice<uint8_t>, int>> iox2_response_subscriber;
+
+    std::optional<iox2::WaitSet<iox2::ServiceType::Ipc>> iox2_waitset;
+    std::optional<iox2::WaitSetGuard<iox2::ServiceType::Ipc>> iox2_waitset_guard;
+#endif
+
+    // IPC backend configuration
+    mignificient::ipc::IPCBackend _ipc_backend;
+    mignificient::ipc::PollingMode _polling_mode;
+    uint32_t _poll_interval_us;
+    mignificient::ipc::BufferConfig _buffer_config;  // gpuless-server channel sizes
 
     int64_t last_sent = 0;
     int64_t last_synchronized = 0;
+
+    // iceoryx2 only: store last received API call for use by send_only() and synchronize()
+    std::shared_ptr<AbstractCudaApiCall> _last_api_call;
 
   private:
     bool negotiateSession(manager::instance_profile profile);
     bool getDeviceAttributes();
 
+    // iceoryx2 only: helper method to receive pending responses directly in main thread
+    // If blocking=true, waits until at least one response is received
+    // If blocking=false, returns immediately after processing available responses
+    //
+    // The latter mode uses a short timeout (1us) to avoid busy-waiting
+    // It seems the current implementation of iceoryx2 WaitSet does not support non-blocking waits
+    void receive_pending_responses(bool blocking);
+
   public:
 
+    // iceoryx1 only: background thread enqueues results here
     moodycamel::BlockingReaderWriterQueue<std::pair<std::shared_ptr<AbstractCudaApiCall>, int>> results;
 
     double serialize_total_time = 0;
