@@ -12,6 +12,8 @@
 
 #include <iceoryx_hoofs/cxx/string.hpp>
 #include <iceoryx_posh/popo/untyped_server.hpp>
+#include <iceoryx_posh/popo/untyped_publisher.hpp>
+#include <iceoryx_posh/popo/untyped_subscriber.hpp>
 #include <iceoryx_posh/popo/wait_set.hpp>
 #include <iceoryx_posh/runtime/posh_runtime.hpp>
 
@@ -25,6 +27,8 @@
 #include "iceoryx_posh/popo/publisher.hpp"
 #include "iceoryx_posh/popo/subscriber.hpp"
 #include "manager_device.hpp"
+
+double serialization_time = 0.0;
 
 extern const int BACKLOG;
 
@@ -85,6 +89,8 @@ handle_execute_request(const gpuless::FBProtocolMessage *msg, int socket_fd) {
   auto &cuda_trace = getCudaTrace();
   auto &vdev = getCudaVirtualDevice();
 
+  auto s = std::chrono::high_resolution_clock::now();
+
   // load new modules
   auto new_modules = msg->message_as_FBTraceExecRequest()->new_modules();
   SPDLOG_INFO("Loading {} new modules", new_modules->size());
@@ -115,6 +121,13 @@ handle_execute_request(const gpuless::FBProtocolMessage *msg, int socket_fd) {
   auto call_stack = gpuless::CudaTraceConverter::execRequestToTrace(p);
   cuda_trace.setCallStack(call_stack);
   SPDLOG_INFO("Execution trace of size {}", call_stack.size());
+
+  auto e = std::chrono::high_resolution_clock::now();
+  auto d1 =
+      std::chrono::duration_cast<std::chrono::microseconds>(e - s).count() /
+      1000000.0;
+
+  serialization_time += d1;
 
   auto &instance = ExecutionStatus::instance();
   auto [begin, end] = cuda_trace.callStack();
@@ -162,6 +175,7 @@ handle_execute_request(const gpuless::FBProtocolMessage *msg, int socket_fd) {
   g_sync_counter++;
   SPDLOG_INFO("Number of synchronizations: {}", g_sync_counter);
 
+  s = std::chrono::high_resolution_clock::now();
   flatbuffers::FlatBufferBuilder builder;
   auto top = cuda_trace.historyTop()->fbSerialize(builder);
 
@@ -171,6 +185,12 @@ handle_execute_request(const gpuless::FBProtocolMessage *msg, int socket_fd) {
       builder, gpuless::FBMessage_FBTraceExecResponse,
       fb_trace_exec_response.Union());
   builder.Finish(fb_protocol_message);
+
+  e = std::chrono::high_resolution_clock::now();
+  d1 =
+      std::chrono::duration_cast<std::chrono::microseconds>(e - s).count() /
+      1000000.0;
+  serialization_time += d1;
 
   instance.save(-1);
 
@@ -230,6 +250,7 @@ finish_trace_execution(int last_idx) {
   g_sync_counter++;
   SPDLOG_INFO("Number of synchronizations: {}", g_sync_counter);
 
+  auto s = std::chrono::high_resolution_clock::now();
   flatbuffers::FlatBufferBuilder builder;
   auto top = cuda_trace.historyTop()->fbSerialize(builder);
 
@@ -239,6 +260,12 @@ finish_trace_execution(int last_idx) {
       builder, gpuless::FBMessage_FBTraceExecResponse,
       fb_trace_exec_response.Union());
   builder.Finish(fb_protocol_message);
+
+  auto e = std::chrono::high_resolution_clock::now();
+  auto d1 =
+      std::chrono::duration_cast<std::chrono::microseconds>(e - s).count() /
+      1000000.0;
+  serialization_time += d1;
 
   instance.save(-1);
 
@@ -263,16 +290,18 @@ void handle_request(int socket_fd) {
       SPDLOG_ERROR("Invalid request type");
       return;
     }
+
+    std::cerr << "Finished " << serialization_time << std::endl;
   }
 }
 
 void ShmemServer::setup(const std::string app_name) {
   iox::runtime::PoshRuntime::initRuntime(
-      iox::RuntimeName_t{iox::cxx::TruncateToCapacity_t{}, app_name});
+      iox::RuntimeName_t{iox::TruncateToCapacity_t{}, app_name.c_str()});
 }
 
 void *ShmemServer::take() {
-  auto ptr = this->server->take();
+  auto ptr = this->client_subscriber->take();
   if (ptr.has_error()) {
     return nullptr;
   } else {
@@ -280,7 +309,7 @@ void *ShmemServer::take() {
   }
 }
 
-void ShmemServer::release(void *ptr) { this->server->releaseRequest(ptr); }
+void ShmemServer::release(void *ptr) { this->client_subscriber->release(ptr); }
 
 bool ShmemServer::_process_remainder() {
   auto &instance = ExecutionStatus::instance();
@@ -291,26 +320,24 @@ bool ShmemServer::_process_remainder() {
 
     const void *requestPayload = instance.load_payload();
 
-    auto requestHeader = iox::popo::RequestHeader::fromPayload(requestPayload);
-    server->loan(requestHeader, sizeof(builder->GetSize()), alignof(1))
+    client_publisher->loan(builder->GetSize(), alignof(1), sizeof(int), alignof(1))
         .and_then([&](auto &responsePayload) {
+
           memcpy(responsePayload, builder->GetBufferPointer(),
                  builder->GetSize());
-          // auto response = static_cast<AddResponse*>(responsePayload);
-          // response->sum = request->augend + request->addend;
-          // std::cout << APP_NAME << " Send Response: " << response->sum <<
-          // std::endl;
-          server->send(responsePayload).or_else([&](auto &error) {
-            std::cout << "Could not send Response! Error: " << error
-                      << std::endl;
-          });
+
+          auto header = static_cast<int*>(iox::mepoo::ChunkHeader::fromUserPayload(responsePayload)->userHeader());
+          auto old_header = static_cast<const int*>(iox::mepoo::ChunkHeader::fromUserPayload(requestPayload)->userHeader());
+          *header = *old_header;
+
+          client_publisher->publish(responsePayload);
         })
         .or_else([&](auto &error) {
           std::cout << "Could not allocate Response! Error: " << error
                     << std::endl;
         });
 
-    server->releaseRequest(requestPayload);
+    client_subscriber->release(requestPayload);
 
     return true;
   } else {
@@ -323,12 +350,14 @@ bool ShmemServer::_process_client(const void *requestPayload) {
   // std::cout << APP_NAME << " Got Request: " << request->augend << " + " <<
   // request->addend << std::endl;
 
-  // auto s = std::chrono::high_resolution_clock::now();
+  auto s = std::chrono::high_resolution_clock::now();
   // handle_request(s_new);
   auto msg = gpuless::GetFBProtocolMessage(requestPayload);
-  // auto e1 = std::chrono::high_resolution_clock::now();
+  auto e1 = std::chrono::high_resolution_clock::now();
 
-  // std::cerr << "Request" << std::endl;
+   auto d1 =
+       std::chrono::duration_cast<std::chrono::microseconds>(e1 - s).count() /
+       1000000.0;
 
   // auto& instance = ExecutionStatus::status();
 
@@ -363,30 +392,25 @@ bool ShmemServer::_process_client(const void *requestPayload) {
 
   if (builder.has_value()) {
 
-    auto requestHeader = iox::popo::RequestHeader::fromPayload(requestPayload);
-    server->loan(requestHeader, sizeof(builder->GetSize()), alignof(1))
+    client_publisher->loan(builder->GetSize(), alignof(1), sizeof(int), alignof(int))
         .and_then([&](auto &responsePayload) {
           memcpy(responsePayload, builder->GetBufferPointer(),
                  builder->GetSize());
-          // auto response = static_cast<AddResponse*>(responsePayload);
-          // response->sum = request->augend + request->addend;
-          // std::cout << APP_NAME << " Send Response: " << response->sum <<
-          // std::endl;
 
-          auto requestHeader =
-              iox::popo::RequestHeader::fromPayload(requestPayload);
-          SPDLOG_DEBUG("Reply_request {}", requestHeader->getSequenceId());
-          server->send(responsePayload).or_else([&](auto &error) {
-            std::cout << "Could not send Response! Error: " << error
-                      << std::endl;
-          });
+          auto header = static_cast<const int*>(iox::mepoo::ChunkHeader::fromUserPayload(requestPayload)->userHeader());
+          SPDLOG_DEBUG("Reply_request {}", *header);
+
+          auto new_header = static_cast<int*>(iox::mepoo::ChunkHeader::fromUserPayload(responsePayload)->userHeader());
+          *new_header = *header;
+
+          client_publisher->publish(responsePayload);
         })
         .or_else([&](auto &error) {
           std::cout << "Could not allocate Response! Error: " << error
                     << std::endl;
         });
 
-    server->releaseRequest(requestPayload);
+    client_subscriber->release(requestPayload);
 
     return true;
   } else {
@@ -402,29 +426,33 @@ bool SigHandler::quit = false;
 
 void ShmemServer::loop_wait(const char *user_name) {
 
-  server.reset(new iox::popo::UntypedServer(
-      {iox::RuntimeName_t{iox::cxx::TruncateToCapacity_t{}, user_name},
-       "Gpuless", "Client"}));
+  client_publisher.reset(new iox::popo::UntypedPublisher(
+      {iox::RuntimeName_t{iox::TruncateToCapacity_t{}, user_name},
+       "Gpuless", "Response"}));
+
+  client_subscriber.reset(new iox::popo::UntypedSubscriber(
+      {iox::RuntimeName_t{iox::TruncateToCapacity_t{}, user_name},
+       "Gpuless", "Request"}));
 
   iox::popo::Publisher<int> orchestrator_send{iox::capro::ServiceDescription{
-      iox::RuntimeName_t{iox::cxx::TruncateToCapacity_t{},
-                         fmt::format("gpuless-{}", user_name)},
+      iox::RuntimeName_t{iox::TruncateToCapacity_t{},
+                         fmt::format("gpuless-{}", user_name).c_str()},
       "Orchestrator", "Send"}};
 
   iox::popo::Subscriber<int> orchestrator_recv{iox::capro::ServiceDescription{
-      iox::RuntimeName_t{iox::cxx::TruncateToCapacity_t{},
-                         fmt::format("gpuless-{}", user_name)},
+      iox::RuntimeName_t{iox::TruncateToCapacity_t{},
+                         fmt::format("gpuless-{}", user_name).c_str()},
       "Orchestrator", "Receive"}};
 
   iox::popo::WaitSet<> waitset;
 
   SigHandler::waitset_ptr = &waitset;
-  sigint.emplace(iox::posix::registerSignalHandler(iox::posix::Signal::INT,
-                                                   SigHandler::sigHandler));
-  sigterm.emplace(iox::posix::registerSignalHandler(iox::posix::Signal::TERM,
-                                                    SigHandler::sigHandler));
+  sigint.emplace(iox::registerSignalHandler(iox::PosixSignal::INT,
+                                                   SigHandler::sigHandler).expect(""));
+  sigterm.emplace(iox::registerSignalHandler(iox::PosixSignal::TERM,
+                                                    SigHandler::sigHandler).expect(""));
 
-  waitset.attachState(*server, iox::popo::ServerState::HAS_REQUEST)
+  waitset.attachState(*client_subscriber, iox::popo::SubscriberState::HAS_DATA)
       .or_else([](auto) {
         std::cerr << "failed to attach server" << std::endl;
         std::exit(EXIT_FAILURE);
@@ -452,24 +480,20 @@ void ShmemServer::loop_wait(const char *user_name) {
 
     for (auto &notification : notificationVector) {
 
-      if (notification->doesOriginateFrom(server.get())) {
+      if (notification->doesOriginateFrom(client_subscriber.get())) {
 
         bool no_more = false;
 
         int idx = 0;
         while (!no_more) {
 
-          server->take()
-              .and_then([&](auto &requestPayload) mutable {
+          client_subscriber->take()
+              .and_then([&](auto &requestPayload) {
                 ++idx;
-                auto requestHeader =
-                    iox::popo::RequestHeader::fromPayload(requestPayload);
-                SPDLOG_DEBUG("Received_request {} ",
-                             requestHeader->getSequenceId());
-                // spdlog::error("Received_request {} ",
-                // requestHeader->getSequenceId());
-                // spdlog::error("Received_request {} has blocked call {}",
-                // requestHeader->getSequenceId(), has_blocked_call);
+
+                auto new_header = static_cast<const int*>(iox::mepoo::ChunkHeader::fromUserPayload(requestPayload)->userHeader());
+                SPDLOG_DEBUG("Received_request {} ", *new_header);
+
                 if (instance.can_exec() && !has_blocked_call) {
                   // has_blocked_call = !_process_client(requestPayload);
                   has_blocked_call = !_process_client(requestPayload);
@@ -483,7 +507,7 @@ void ShmemServer::loop_wait(const char *user_name) {
         }
 
         SPDLOG_INFO("Received {} requests", idx);
-        MemoryStore::get_instance().print_stats();
+        //MemoryStore::get_instance().print_stats();
 
       } else {
 
@@ -542,15 +566,15 @@ void ShmemServer::loop_wait(const char *user_name) {
 void ShmemServer::loop(const char *user_name) {
 
   // FIXME: add here communication with orchestrato
-  server.reset(new iox::popo::UntypedServer(
-      {iox::RuntimeName_t{iox::cxx::TruncateToCapacity_t{}, user_name},
-       "Gpuless", "Client"}));
-
+  //server.reset(new iox::popo::UntypedServer(
+  //    {iox::RuntimeName_t{iox::cxx::TruncateToCapacity_t{}, user_name},
+  //     "Gpuless", "Client"}));
+  abort();
   double sum = 0;
-  while (!iox::posix::hasTerminationRequested()) {
+  while (!iox::hasTerminationRequested()) {
 
-    server->take().and_then(
-        [&](auto &requestPayload) { _process_client(requestPayload); });
+    //server->take().and_then(
+    //    [&](auto &requestPayload) { _process_client(requestPayload); });
   }
 }
 

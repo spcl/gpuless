@@ -6,9 +6,13 @@
 #include "trace_executor.hpp"
 #include "shmem/mempool.hpp"
 
+#include "readerwriterqueue.h"
+
 #include <iceoryx_posh/popo/wait_set.hpp>
 #include <iceoryx_posh/internal/runtime/posh_runtime_impl.hpp>
 #include <iceoryx_posh/popo/untyped_client.hpp>
+#include <iceoryx_posh/popo/untyped_subscriber.hpp>
+#include <iceoryx_posh/popo/untyped_publisher.hpp>
 #include <iceoryx_hoofs/cxx/optional.hpp>
 
 namespace gpuless {
@@ -23,7 +27,8 @@ class TraceExecutorShmem : public TraceExecutor {
 
     // Not great - internal feature - but we don't have a better solution.
     std::unique_ptr<iox::runtime::PoshRuntimeImpl> _impl;
-    std::unique_ptr<iox::popo::UntypedClient> client;
+    std::unique_ptr<iox::popo::UntypedPublisher> request_publisher;
+    std::unique_ptr<iox::popo::UntypedSubscriber> request_subscriber;
     std::optional<iox::popo::WaitSet<>> waitset;
 
     bool wait_poll;
@@ -36,6 +41,10 @@ class TraceExecutorShmem : public TraceExecutor {
     bool getDeviceAttributes();
 
   public:
+
+    moodycamel::BlockingReaderWriterQueue<std::pair<std::shared_ptr<AbstractCudaApiCall>, int>> results;
+
+    double serialize_total_time = 0;
 
     MemPool _pool;
     TraceExecutorShmem();

@@ -6,12 +6,16 @@
 
 #include "manager_device.hpp"
 
+#include <spdlog/spdlog.h>
+
 extern const int BACKLOG = 5;
 
 int main(int argc, char **argv) {
 
   std::string device{argv[1]};
   std::string manager_type{argv[2]};
+
+  spdlog::set_pattern("[%H:%M:%S:%e:%f] %v");
 
   char* cpu_idx = std::getenv("CPU_BIND_IDX");
   if(cpu_idx) {
@@ -33,6 +37,8 @@ int main(int argc, char **argv) {
 
   int cpu = sched_getcpu();
   spdlog::info("Running on CPU: {}", cpu);
+
+  spdlog::set_level(spdlog::level::debug);
 
   if (manager_type == "tcp") {
     if (argc != 4)
