@@ -730,6 +730,7 @@ void ShmemServer::loop_wait_v2(const char *user_name) {
       .user_header<int>()
       .max_publishers(1)
       .max_subscribers(1)
+      .enable_safe_overflow(false)
       .subscriber_max_buffer_size(buf_cfg.queue_capacity)
       .open_or_create().value();
 
@@ -754,10 +755,11 @@ void ShmemServer::loop_wait_v2(const char *user_name) {
       .user_header<int>()
       .max_publishers(1)
       .max_subscribers(1)
+      .enable_safe_overflow(false)
       .subscriber_max_buffer_size(buf_cfg.queue_capacity)
       .open_or_create().value();
 
-    auto pub_result = service_result.subscriber_builder().create();
+    auto pub_result = service_result.subscriber_builder().buffer_size(buf_cfg.queue_capacity).create();
     if (!pub_result.has_value()) {
       spdlog::error("Failed to create client publisher: {}", static_cast<uint64_t>(pub_result.error()));
       std::exit(EXIT_FAILURE);
@@ -859,19 +861,20 @@ void ShmemServer::loop_wait_v2(const char *user_name) {
 
           ++idx;
           auto res = iox2_client_subscriber->receive();
-          if(!res.has_value() || !res.value().has_value()) {
-            break;
-          }
+          while(res.has_value() && res.value().has_value()) {
 
-          auto payload = res.value()->payload();
+            auto payload = res.value()->payload();
 
-          auto new_header = res.value()->user_header();
-          SPDLOG_DEBUG("Received_request {} ", new_header);
+            auto new_header = res.value()->user_header();
+            SPDLOG_DEBUG("Received_request {} ", new_header);
 
-          if (instance.can_exec() && !has_blocked_call) {
-            has_blocked_call = !_process_client(payload.data());
-          } else {
-            pendingPayload.push(payload.data());
+            if (instance.can_exec() && !has_blocked_call) {
+              has_blocked_call = !_process_client(payload.data());
+            } else {
+              pendingPayload.push(payload.data());
+            }
+
+            res = iox2_client_subscriber->receive();
           }
 
           event_res = iox2_client_listener->try_wait_one();

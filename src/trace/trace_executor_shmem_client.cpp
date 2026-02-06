@@ -156,6 +156,7 @@ TraceExecutorShmem::TraceExecutorShmem():
         .user_header<int>()
         .max_publishers(1)
         .max_subscribers(1)
+        .enable_safe_overflow(false)
         .subscriber_max_buffer_size(buf_cfg.queue_capacity)
         .open_or_create();
 
@@ -191,6 +192,7 @@ TraceExecutorShmem::TraceExecutorShmem():
         .user_header<int>()
         .max_publishers(1)
         .max_subscribers(1)
+        .enable_safe_overflow(false)
         .subscriber_max_buffer_size(buf_cfg.queue_capacity)
         .open_or_create();
 
@@ -205,7 +207,7 @@ TraceExecutorShmem::TraceExecutorShmem():
         std::exit(EXIT_FAILURE);
       }
 
-      auto sub_result = service_result.value().subscriber_builder().create();
+      auto sub_result = service_result.value().subscriber_builder().buffer_size(buf_cfg.queue_capacity).create();
       if (!sub_result.has_value()) {
         spdlog::error("Failed to create publisher: {}", static_cast<uint64_t>(sub_result.error()));
       }
@@ -554,44 +556,31 @@ bool TraceExecutorShmem::send_only(CudaTrace &cuda_trace)
         status = results.try_dequeue(cuda_api_call);
       }
       last_api_call_result = cuda_api_call.first;
-    } else {
-      // iceoryx2: direct poll in main thread
-      auto s1 = std::chrono::high_resolution_clock::now();
-      receive_pending_responses(false);
-      auto e1 = std::chrono::high_resolution_clock::now();
-      auto d1 =
-          std::chrono::duration_cast<std::chrono::microseconds>(e1 - s1).count() /
-          1000000.0;
-      duration += d1;
-      //spdlog::info("Opportunistic sync, now position synchronized {}, time spent {}", last_synchronized, duration);
-      SPDLOG_INFO("Opportunistic sync, now position synchronized {}", last_synchronized);
-      last_api_call_result = _last_api_call;
-    }
 
-    int64_t synchronized_calls = last_synchronized - prev_synchronization;
-    if(synchronized_calls > 0) {
+      int64_t synchronized_calls = last_synchronized - prev_synchronization;
+      if(synchronized_calls > 0) {
 
-      // Here we want to access the part of call stack that was already sent.
-      auto [begin, end] = cuda_trace.fullCallStack();
-      for(int i = 0; i < synchronized_calls; ++i) {
+        // Here we want to access the part of call stack that was already sent.
+        auto [begin, end] = cuda_trace.fullCallStack();
+        for(int i = 0; i < synchronized_calls; ++i) {
 
-        if(auto* ptr = dynamic_cast<CudaMemcpyH2D*>((*begin).get())) {
-          _pool.give(ptr->shared_name);
+          if(auto* ptr = dynamic_cast<CudaMemcpyH2D*>((*begin).get())) {
+            _pool.give(ptr->shared_name);
+          }
+          if(auto* ptr = dynamic_cast<CudaMemcpyAsyncH2D*>((*begin).get())) {
+            _pool.give(ptr->shared_name);
+          }
+
+          ++begin;
+
         }
-        if(auto* ptr = dynamic_cast<CudaMemcpyAsyncH2D*>((*begin).get())) {
-          _pool.give(ptr->shared_name);
-        }
-
-        ++begin;
-
-      }
 
       cuda_trace.markSynchronized(synchronized_calls);
       if(last_api_call_result) {
         cuda_trace.setHistoryTop(last_api_call_result);
-        //spdlog::info("Synchronized calls {}, new history top {}", synchronized_calls, cuda_trace.sizeCallStack());
       }
     }
+}
 
     //auto f = std::chrono::high_resolution_clock::now();
     //auto d3 =
