@@ -14,23 +14,24 @@ option(SPDLOG_LEVEL_DEBUG "Set the spdlog level to debug" OFF)
 option(SPDLOG_LEVEL_TRACE "Set the spdlog level to trace" OFF)
 option(SPDLOG_LEVEL_OFF "Set the spdlog level to off" OFF)
 
-#if(SPDLOG_LEVEL_INFO)
-#    add_compile_definitions(SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_INFO)
-#    message("Set SPDLOG_LEVEL_INFO")
-#elseif(SPDLOG_LEVEL_DEBUG)
-#    add_compile_definitions(SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_DEBUG)
-#    message("Set SPDLOG_LEVEL_DEBUG")
-#elseif(SPDLOG_LEVEL_OFF)
-#    add_compile_definitions(SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_OFF)
-#    message("Set SPDLOG_LEVEL_OFF")
-#elseif(SPDLOG_LEVEL_TRACE)
-#    add_compile_definitions(SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_TRACE)
-#    message("Set SPDLOG_LEVEL_TRACE")
-#else()
-#    add_compile_definitions(SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_OFF)
-#    message("Set SPDLOG_LEVEL_OFF")
-#endif()
-add_compile_definitions(SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_OFF)
+if(SPDLOG_LEVEL_INFO)
+    add_compile_definitions(SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_INFO)
+    message("Set SPDLOG_LEVEL_INFO")
+elseif(SPDLOG_LEVEL_DEBUG)
+    add_compile_definitions(SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_DEBUG)
+    message("Set SPDLOG_LEVEL_DEBUG")
+elseif(SPDLOG_LEVEL_OFF)
+    add_compile_definitions(SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_OFF)
+    message("Set SPDLOG_LEVEL_OFF")
+elseif(SPDLOG_LEVEL_TRACE)
+    add_compile_definitions(SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_TRACE)
+    message("Set SPDLOG_LEVEL_TRACE")
+else()
+    add_compile_definitions(SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_OFF)
+    message("Set SPDLOG_LEVEL_OFF")
+endif()
+#add_compile_definitions(SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_OFF)
+#add_compile_definitions(SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_DEBUG)
 
 if(BUILD_SHMEM)
   find_package(iceoryx_posh CONFIG REQUIRED)
@@ -42,7 +43,7 @@ add_compile_definitions(GPULESS_ELF_ANALYZER)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 link_directories(${CMAKE_CURRENT_SOURCE_DIR}/lib)
 
-# special options for compiling on the CSCS cluster
+# special options for compiling on CSCS cluster
 cmake_host_system_information(RESULT _hostname QUERY HOSTNAME)
 if (${_hostname} MATCHES ".*\.cscs\.ch")
     add_compile_options(-DCSCS)
@@ -107,10 +108,14 @@ target_link_libraries(manager_trace
     pthread
     flatbuffers
     iceoryx_posh::iceoryx_posh
+    mignificient_common
 )
 
 if(BUILD_SHMEM)
   target_link_libraries(manager_trace iceoryx_posh::iceoryx_posh iceoryx_hoofs::iceoryx_hoofs)
+  if(BUILD_ICEORYX2)
+    target_link_libraries(manager_trace iceoryx2-cxx::static-lib-cxx)
+  endif()
 endif()
 
 add_executable(manager_device
@@ -148,10 +153,14 @@ target_link_libraries(manager_device
     pthread
     flatbuffers
     iceoryx_posh::iceoryx_posh
+    mignificient_common
 )
 
 if(BUILD_SHMEM)
   target_link_libraries(manager_device iceoryx_posh::iceoryx_posh iceoryx_hoofs::iceoryx_hoofs)
+  if(BUILD_ICEORYX2)
+    target_link_libraries(manager_device iceoryx2-cxx::static-lib-cxx)
+  endif()
 endif()
 
 add_library(analysis SHARED
@@ -209,10 +218,14 @@ target_link_libraries(gpuless
     CUDA::cublas
     flatbuffers
     iceoryx_posh::iceoryx_posh
+    mignificient_common
 )
 
 if(BUILD_SHMEM)
   target_link_libraries(gpuless iceoryx_posh::iceoryx_posh iceoryx_hoofs::iceoryx_hoofs)
+  if(BUILD_ICEORYX2)
+    target_link_libraries(gpuless iceoryx2-cxx::static-lib-cxx)
+  endif()
 endif()
 
 add_executable(cubin_analyzer

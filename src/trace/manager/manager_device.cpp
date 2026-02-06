@@ -1,4 +1,6 @@
+#include <chrono>
 #include <iostream>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -16,6 +18,10 @@
 #include <iceoryx_posh/popo/untyped_subscriber.hpp>
 #include <iceoryx_posh/popo/wait_set.hpp>
 #include <iceoryx_posh/runtime/posh_runtime.hpp>
+
+#ifdef MIGNIFICIENT_WITH_ICEORYX2
+#include <iox2/iceoryx2.hpp>
+#endif
 
 #include "../../schemas/trace_execution_protocol_generated.h"
 #include "../../utils.hpp"
@@ -291,7 +297,6 @@ void handle_request(int socket_fd) {
       return;
     }
 
-    std::cerr << "Finished " << serialization_time << std::endl;
   }
 }
 
@@ -320,15 +325,30 @@ bool ShmemServer::_process_remainder() {
 
     const void *requestPayload = instance.load_payload();
 
-    client_publisher->loan(builder->GetSize(), alignof(1), sizeof(int), alignof(1))
+    _send_response(builder.value(), requestPayload);
+    _release_request(requestPayload);
+
+    return true;
+  } else {
+    return false;
+  }
+}
+
+void ShmemServer::_send_response(const flatbuffers::FlatBufferBuilder& builder,
+                                  const void* requestPayload) {
+  if (_ipc_backend == mignificient::ipc::IPCBackend::ICEORYX_V1) {
+    client_publisher->loan(builder.GetSize(), alignof(1), sizeof(int), alignof(int))
         .and_then([&](auto &responsePayload) {
+          memcpy(responsePayload, builder.GetBufferPointer(),
+                 builder.GetSize());
 
-          memcpy(responsePayload, builder->GetBufferPointer(),
-                 builder->GetSize());
+          auto header = static_cast<const int*>(
+              iox::mepoo::ChunkHeader::fromUserPayload(requestPayload)->userHeader());
+          SPDLOG_DEBUG("Reply_request {}", *header);
 
-          auto header = static_cast<int*>(iox::mepoo::ChunkHeader::fromUserPayload(responsePayload)->userHeader());
-          auto old_header = static_cast<const int*>(iox::mepoo::ChunkHeader::fromUserPayload(requestPayload)->userHeader());
-          *header = *old_header;
+          auto new_header = static_cast<int*>(
+              iox::mepoo::ChunkHeader::fromUserPayload(responsePayload)->userHeader());
+          *new_header = *header;
 
           client_publisher->publish(responsePayload);
         })
@@ -336,13 +356,53 @@ bool ShmemServer::_process_remainder() {
           std::cout << "Could not allocate Response! Error: " << error
                     << std::endl;
         });
-
-    client_subscriber->release(requestPayload);
-
-    return true;
-  } else {
-    return false;
   }
+#ifdef MIGNIFICIENT_WITH_ICEORYX2
+  else if (_ipc_backend == mignificient::ipc::IPCBackend::ICEORYX_V2) {
+
+    auto sample = iox2_client_publisher->loan_slice(builder.GetSize());
+    if (!sample.has_value()) {
+      spdlog::error("Could not allocate response sample: {}", static_cast<uint64_t>(sample.error()));
+      return;
+    }
+
+    SPDLOG_DEBUG("iceoryx2: Sending response size {}", builder.GetSize());
+
+    auto payload = sample.value().payload_mut();
+    if (payload.number_of_elements() >= builder.GetSize()) {
+      std::memcpy(payload.data(), builder.GetBufferPointer(), builder.GetSize());
+    } else {
+      spdlog::error("Critical error! Sample not enough {} for {}", payload.number_of_elements(), builder.GetSize());
+    }
+
+    auto send_result = iox2::send(std::move(sample.value()));
+    if (!send_result.has_value()) {
+      SPDLOG_ERROR("iceoryx2: Failed to send response: {}", static_cast<uint64_t>(send_result.error()));
+    }
+
+    auto notify_result = iox2_client_notifier->notify();
+    if (!notify_result.has_value()) {
+      std::cout << "Could not send Request! Error: " << static_cast<uint64_t>(notify_result.error()) << std::endl;
+    }
+
+  }
+#endif
+  else {
+    abort();
+  }
+}
+
+void ShmemServer::_release_request(const void* requestPayload) {
+  if (_ipc_backend == mignificient::ipc::IPCBackend::ICEORYX_V1) {
+    client_subscriber->release(requestPayload);
+  }
+#ifdef MIGNIFICIENT_WITH_ICEORYX2
+  else {
+    // iceoryx2 subscriber release - samples are auto-released after processing
+    // No explicit release needed, samples are RAII-managed
+    SPDLOG_DEBUG("iceoryx2: Request sample auto-released");
+  }
+#endif
 }
 
 bool ShmemServer::_process_client(const void *requestPayload) {
@@ -392,25 +452,8 @@ bool ShmemServer::_process_client(const void *requestPayload) {
 
   if (builder.has_value()) {
 
-    client_publisher->loan(builder->GetSize(), alignof(1), sizeof(int), alignof(int))
-        .and_then([&](auto &responsePayload) {
-          memcpy(responsePayload, builder->GetBufferPointer(),
-                 builder->GetSize());
-
-          auto header = static_cast<const int*>(iox::mepoo::ChunkHeader::fromUserPayload(requestPayload)->userHeader());
-          SPDLOG_DEBUG("Reply_request {}", *header);
-
-          auto new_header = static_cast<int*>(iox::mepoo::ChunkHeader::fromUserPayload(responsePayload)->userHeader());
-          *new_header = *header;
-
-          client_publisher->publish(responsePayload);
-        })
-        .or_else([&](auto &error) {
-          std::cout << "Could not allocate Response! Error: " << error
-                    << std::endl;
-        });
-
-    client_subscriber->release(requestPayload);
+    _send_response(builder.value(), requestPayload);
+    _release_request(requestPayload);
 
     return true;
   } else {
@@ -473,6 +516,7 @@ void ShmemServer::loop_wait(const char *user_name) {
   bool has_blocked_call = false;
   auto &instance = ExecutionStatus::instance();
 
+  int idx = 0;
   while (!SigHandler::quit) {
 
     auto notificationVector = waitset.wait();
@@ -484,7 +528,6 @@ void ShmemServer::loop_wait(const char *user_name) {
 
         bool no_more = false;
 
-        int idx = 0;
         while (!no_more) {
 
           client_subscriber->take()
@@ -561,22 +604,336 @@ void ShmemServer::loop_wait(const char *user_name) {
       }
     }
   }
+  spdlog::info("Received {} requests", idx);
 }
 
 void ShmemServer::loop(const char *user_name) {
 
-  // FIXME: add here communication with orchestrato
-  //server.reset(new iox::popo::UntypedServer(
-  //    {iox::RuntimeName_t{iox::cxx::TruncateToCapacity_t{}, user_name},
-  //     "Gpuless", "Client"}));
-  abort();
-  double sum = 0;
-  while (!iox::hasTerminationRequested()) {
+  client_publisher.reset(new iox::popo::UntypedPublisher(
+      {iox::RuntimeName_t{iox::TruncateToCapacity_t{}, user_name},
+       "Gpuless", "Response"}));
 
-    //server->take().and_then(
-    //    [&](auto &requestPayload) { _process_client(requestPayload); });
+  client_subscriber.reset(new iox::popo::UntypedSubscriber(
+      {iox::RuntimeName_t{iox::TruncateToCapacity_t{}, user_name},
+       "Gpuless", "Request"}));
+
+  iox::popo::Publisher<int> orchestrator_send{iox::capro::ServiceDescription{
+      iox::RuntimeName_t{iox::TruncateToCapacity_t{},
+                         fmt::format("gpuless-{}", user_name).c_str()},
+      "Orchestrator", "Send"}};
+
+  iox::popo::Subscriber<int> orchestrator_recv{iox::capro::ServiceDescription{
+      iox::RuntimeName_t{iox::TruncateToCapacity_t{},
+                         fmt::format("gpuless-{}", user_name).c_str()},
+      "Orchestrator", "Receive"}};
+
+  SigHandler::quit = false;
+  sigint.emplace(iox::registerSignalHandler(iox::PosixSignal::INT,
+                                                   SigHandler::sigHandler).expect(""));
+  sigterm.emplace(iox::registerSignalHandler(iox::PosixSignal::TERM,
+                                                    SigHandler::sigHandler).expect(""));
+
+  orchestrator_send.loan().and_then([&](auto &payload) {
+    *payload = static_cast<int>(GPUlessMessage::REGISTER);
+    orchestrator_send.publish(std::move(payload));
+  });
+
+  std::queue<const void *> pendingPayload;
+  bool has_blocked_call = false;
+  auto &instance = ExecutionStatus::instance();
+
+  while (!SigHandler::quit) {
+
+    bool had_activity = false;
+
+    // Poll for client requests
+    auto val = client_subscriber->take();
+    while(!val.has_error()) {
+      had_activity = true;
+      auto requestPayload = val.value();
+
+      auto new_header = static_cast<const int*>(iox::mepoo::ChunkHeader::fromUserPayload(requestPayload)->userHeader());
+      SPDLOG_DEBUG("Received_request {} ", *new_header);
+
+      if (instance.can_exec() && !has_blocked_call) {
+        has_blocked_call = !_process_client(requestPayload);
+      } else {
+        pendingPayload.push(requestPayload);
+      }
+
+      val = client_subscriber->take();
+    }
+
+    // Poll for orchestrator messages
+    auto orch_val = orchestrator_recv.take();
+    while (!orch_val.has_error()) {
+      had_activity = true;
+
+      int code = *orch_val->get();
+      spdlog::error("Message from the orchestrator! Code {}", code);
+
+      if (code == static_cast<int>(GPUlessMessage::LOCK_DEVICE)) {
+        instance.lock();
+      } else if (code == static_cast<int>(GPUlessMessage::BASIC_EXEC)) {
+        instance.basic_exec();
+      } else if (code == static_cast<int>(GPUlessMessage::MEMCPY_ONLY)) {
+        instance.memcpy();
+      } else if (code == static_cast<int>(GPUlessMessage::FULL_EXEC)) {
+        instance.exec();
+      }
+
+      orch_val = orchestrator_recv.take();
+    }
+
+    // Process unfinished traces and pending payloads
+    if (instance.has_unfinished_trace()) {
+      has_blocked_call = !_process_remainder();
+    }
+
+    if (!pendingPayload.empty() && instance.can_exec()) {
+      while (!pendingPayload.empty() && !has_blocked_call) {
+        auto payload = pendingPayload.front();
+        pendingPayload.pop();
+        has_blocked_call = !_process_client(payload);
+      }
+    }
+
+    // Sleep briefly if no activity to avoid busy-waiting
+    if (!had_activity) {
+      std::this_thread::sleep_for(std::chrono::microseconds(_poll_interval_us));
+    }
   }
 }
+
+#ifdef MIGNIFICIENT_WITH_ICEORYX2
+void ShmemServer::loop_wait_v2(const char *user_name) {
+  spdlog::info("Starting iceoryx2 server loop for user {}", user_name);
+
+  auto node_result = iox2::NodeBuilder()
+    .name(iox2::NodeName::create(user_name).value())
+    .create<iox2::ServiceType::Ipc>();
+
+  if (!node_result.has_value()) {
+    spdlog::error("Failed to create iceoryx2 node: {}", static_cast<uint64_t>(node_result.error()));
+    std::exit(EXIT_FAILURE);
+  }
+  iox2_node = std::move(node_result.value());
+
+  auto& node = iox2_node.value();
+  auto& buf_cfg = _buffer_config;
+
+  {
+    auto service_name = std::string(user_name) + ".Gpuless.Recv";
+    auto service_result = node.service_builder(
+      iox2::ServiceName::create(service_name.c_str()).value())
+      .publish_subscribe<iox2::bb::Slice<uint8_t>>()
+      .user_header<int>()
+      .max_publishers(1)
+      .max_subscribers(1)
+      .enable_safe_overflow(false)
+      .subscriber_max_buffer_size(buf_cfg.queue_capacity)
+      .open_or_create().value();
+
+    //auto pub_result = service_result.publisher_builder().create();
+    auto pub_result = service_result
+      .publisher_builder()
+      .allocation_strategy(iox2::AllocationStrategy::BestFit)
+      .initial_max_slice_len(4096)
+      .create();
+    if (!pub_result.has_value()) {
+      spdlog::error("Failed to create client publisher: {}", static_cast<uint64_t>(pub_result.error()));
+      std::exit(EXIT_FAILURE);
+    }
+    iox2_client_publisher = std::move(pub_result.value());
+  }
+
+  {
+    auto service_name = std::string(user_name) + ".Gpuless.Send";
+    auto service_result = node.service_builder(
+      iox2::ServiceName::create(service_name.c_str()).value())
+      .publish_subscribe<iox2::bb::Slice<uint8_t>>()
+      .user_header<int>()
+      .max_publishers(1)
+      .max_subscribers(1)
+      .enable_safe_overflow(false)
+      .subscriber_max_buffer_size(buf_cfg.queue_capacity)
+      .open_or_create().value();
+
+    auto pub_result = service_result.subscriber_builder().buffer_size(buf_cfg.queue_capacity).create();
+    if (!pub_result.has_value()) {
+      spdlog::error("Failed to create client publisher: {}", static_cast<uint64_t>(pub_result.error()));
+      std::exit(EXIT_FAILURE);
+    }
+    iox2_client_subscriber = std::move(pub_result.value());
+  }
+
+  {
+    auto exec_event_service = node.service_builder(
+        iox2::ServiceName::create(fmt::format("{}.Gpuless.Listener", user_name).c_str()).value())
+    .event().open_or_create();
+    if (exec_event_service.has_value()) {
+      iox2_client_event_notify = std::move(exec_event_service.value());
+    }
+  }
+  {
+    auto exec_event_service = node.service_builder(
+        iox2::ServiceName::create(fmt::format("{}.Gpuless.Notify", user_name).c_str()).value())
+    .event().open_or_create();
+    if (exec_event_service.has_value()) {
+      iox2_client_event_listen = std::move(exec_event_service.value());
+    }
+  }
+
+  iox2_client_listener = iox2_client_event_listen->listener_builder().create().value();
+  iox2_client_notifier = iox2_client_event_notify->notifier_builder().create().value();
+
+  {
+    auto exec_event_service = node.service_builder(
+        iox2::ServiceName::create(fmt::format("{}.Orchestrator.Gpuless.Notify", user_name).c_str()).value())
+    .event().open_or_create();
+    if (exec_event_service.has_value()) {
+      iox2_orchestrator_event_listen = std::move(exec_event_service.value());
+    }
+  }
+  {
+    auto exec_event_service = node.service_builder(
+        iox2::ServiceName::create(fmt::format("{}.Orchestrator.Gpuless.Listen", user_name).c_str()).value())
+    .event().open_or_create();
+    if (exec_event_service.has_value()) {
+      iox2_orchestrator_event_notify = std::move(exec_event_service.value());
+    }
+  }
+
+  iox2_orchestrator_listener = iox2_orchestrator_event_listen->listener_builder().create().value();
+  iox2_orchestrator_notifier = iox2_orchestrator_event_notify->notifier_builder().create().value();
+  if(!iox2_orchestrator_listener.has_value() || !iox2_orchestrator_notifier.has_value()) {
+    spdlog::error("Failed to create iceoryx2 listener/notifier");
+    throw std::runtime_error("Failed to create iceoryx2 listener/notifier");
+  }
+
+  auto res = iox2::WaitSetBuilder()
+  .signal_handling_mode(iox2::SignalHandlingMode::HandleTerminationRequests)
+  .create<iox2::ServiceType::Ipc>();
+  if(!res.has_value()) {
+    spdlog::error("Failed to create iceoryx2 WaitSet: {}", static_cast<uint64_t>(res.error()));
+    throw std::runtime_error("Failed to create iceoryx2 WaitSet");
+  }
+  iox2::WaitSet<iox2::ServiceType::Ipc> iox2_waitset = std::move(res.value());
+
+  auto orchestrator_guard_res = iox2_waitset.attach_notification(iox2_orchestrator_listener.value());
+  if(!orchestrator_guard_res.has_value()) {
+    spdlog::error("Failed to attach orchestrator listener to waitset: {}", static_cast<uint64_t>(orchestrator_guard_res.error()));
+    throw std::runtime_error("Failed to attach orchestrator listener to waitset");
+  }
+  auto orchestrator_guard = std::move(orchestrator_guard_res.value());
+
+  auto client_guard_res = iox2_waitset.attach_notification(iox2_client_listener.value());
+  if(!client_guard_res.has_value()) {
+    spdlog::error("Failed to attach executor listener to waitset: {}", static_cast<uint64_t>(orchestrator_guard_res.error()));
+    throw std::runtime_error("Failed to attach executor listener to waitset");
+  }
+  auto client_guard = std::move(client_guard_res.value());
+
+  {
+    // Send REGISTER message to orchestrator
+    auto res = iox2_orchestrator_notifier->notify_with_custom_event_id(iox2::EventId{static_cast<int>(GPUlessMessage::REGISTER)});
+    if(!res.has_value()) {
+      spdlog::error("Failed to send REGISTER notification to orchestrator: {}", static_cast<uint64_t>(res.error()));
+      abort();
+    }
+  }
+
+  std::queue<const void*> pendingPayload;
+  bool has_blocked_call = false;
+  auto& instance = ExecutionStatus::instance();
+
+  int idx = 0;
+
+  auto loop_res = iox2_waitset.wait_and_process(
+    [&](iox2::WaitSetAttachmentId<iox2::ServiceType::Ipc> attachment_id) {
+
+      if(attachment_id.has_event_from(client_guard)) {
+
+        bool no_more = false;
+
+        auto event_res = iox2_client_listener->try_wait_one();
+        while(event_res.has_value() && event_res.value().has_value()) {
+
+          ++idx;
+          auto res = iox2_client_subscriber->receive();
+          while(res.has_value() && res.value().has_value()) {
+
+            auto payload = res.value()->payload();
+
+            auto new_header = res.value()->user_header();
+            SPDLOG_DEBUG("Received_request {} ", new_header);
+
+            if (instance.can_exec() && !has_blocked_call) {
+              has_blocked_call = !_process_client(payload.data());
+            } else {
+              pendingPayload.push(payload.data());
+            }
+
+            res = iox2_client_subscriber->receive();
+          }
+
+          event_res = iox2_client_listener->try_wait_one();
+        }
+
+        SPDLOG_INFO("Received {} requests", idx);
+
+      } else if(attachment_id.has_event_from(orchestrator_guard)) {
+
+        auto event_res = iox2_orchestrator_listener->try_wait_one();
+
+        while(event_res.has_value() && event_res.value().has_value()) {
+
+          int code = event_res.value()->as_value();
+          spdlog::error("Message from the orchestrator! Code {}", code);
+
+            auto &instance = ExecutionStatus::instance();
+            if (code == static_cast<int>(GPUlessMessage::LOCK_DEVICE)) {
+              instance.lock();
+            } else if (code == static_cast<int>(GPUlessMessage::BASIC_EXEC)) {
+              instance.basic_exec();
+            } else if (code == static_cast<int>(GPUlessMessage::MEMCPY_ONLY)) {
+              instance.memcpy();
+            } else if (code == static_cast<int>(GPUlessMessage::FULL_EXEC)) {
+              instance.exec();
+            }
+
+          event_res = iox2_orchestrator_listener->try_wait_one();
+        }
+
+        if (instance.has_unfinished_trace()) {
+          has_blocked_call = !_process_remainder();
+        }
+
+        if (!pendingPayload.empty() && instance.can_exec()) {
+
+          while (!pendingPayload.empty() && !has_blocked_call) {
+
+            auto payload = pendingPayload.front();
+            pendingPayload.pop();
+            has_blocked_call = !_process_client(payload);
+          }
+        }
+
+        event_res = iox2_orchestrator_listener->try_wait_one();
+      }
+
+      return iox2::CallbackProgression::Continue;
+    }
+  );
+
+  if(!loop_res.has_value()) {
+    spdlog::error("Error in iceoryx2 event loop: {}", static_cast<uint64_t>(loop_res.error()));
+  }
+  spdlog::info("Finished iceoryx2 event loop with status {}", loop_res.value());
+  spdlog::info("Received {} requests", idx);
+
+}
+#endif
 
 void manage_device(const std::string &device, uint16_t port) {
   setenv("CUDA_VISIBLE_DEVICES", device.c_str(), 1);
@@ -632,6 +989,54 @@ void manage_device_shmem(const std::string &device, const std::string &app_name,
 
   ShmemServer shm_server;
 
+  // Determine IPC backend from environment variable
+  const char* ipc_backend_env = std::getenv("IPC_BACKEND");
+  shm_server._ipc_backend = mignificient::ipc::IPCConfig::convert_ipc_backend(ipc_backend_env);
+  if (shm_server._ipc_backend == mignificient::ipc::IPCBackend::ICEORYX_V2) {
+    spdlog::info("GPUless server using iceoryx2 backend");
+  } else if (shm_server._ipc_backend == mignificient::ipc::IPCBackend::ICEORYX_V1) {
+    spdlog::info("GPUless server using iceoryx1 backend");
+  } else {
+    spdlog::error("Unknown IPC backend type specified! {}", ipc_backend_env);
+    throw std::runtime_error("Unknown IPC backend type specified");
+  }
+
+  // Determine polling mode from poll_type parameter or environment variable
+  if (std::string_view{poll_type} == "wait") {
+    shm_server._polling_mode = mignificient::ipc::PollingMode::WAIT;
+  } else {
+    shm_server._polling_mode = mignificient::ipc::PollingMode::POLL;
+  }
+
+  // Environment variable override for poll interval
+  const char* poll_interval_env = std::getenv("MIGNIFICIENT_POLL_INTERVAL_US");
+  if (poll_interval_env) {
+    shm_server._poll_interval_us = static_cast<uint32_t>(std::atoi(poll_interval_env));
+  }
+
+  spdlog::info("GPUless server polling mode: {}, interval: {}us",
+               shm_server._polling_mode == mignificient::ipc::PollingMode::WAIT ? "wait" : "poll",
+               shm_server._poll_interval_us);
+
+  shm_server._buffer_config = mignificient::ipc::BufferConfig(52428800, 52428800, 5);
+  const char* gpuless_req_size = std::getenv("GPULESS_REQUEST_SIZE");
+  if (gpuless_req_size) {
+    shm_server._buffer_config.request_size = std::stoull(gpuless_req_size);
+  }
+  const char* gpuless_resp_size = std::getenv("GPULESS_RESPONSE_SIZE");
+  if (gpuless_resp_size) {
+    shm_server._buffer_config.response_size = std::stoull(gpuless_resp_size);
+  }
+  const char* gpuless_queue_cap = std::getenv("GPULESS_QUEUE_CAPACITY");
+  if (gpuless_queue_cap) {
+    shm_server._buffer_config.queue_capacity = std::stoull(gpuless_queue_cap);
+  }
+
+  spdlog::info("GPUless server buffer config: request={}B, response={}B, capacity={}",
+               shm_server._buffer_config.request_size,
+               shm_server._buffer_config.response_size,
+               shm_server._buffer_config.queue_capacity);
+
   shm_server.setup(app_name);
 
   if (use_vmm) {
@@ -644,10 +1049,21 @@ void manage_device_shmem(const std::string &device, const std::string &app_name,
   // initialize cuda device pre-emptively
   getCudaVirtualDevice().initRealDevice();
 
-  if (std::string_view{poll_type} == "wait") {
-    shm_server.loop_wait(user_name);
-  } else {
-    shm_server.loop(user_name);
+  if (shm_server._ipc_backend == mignificient::ipc::IPCBackend::ICEORYX_V1) {
+    if (std::string_view{poll_type} == "wait") {
+      shm_server.loop_wait(user_name);
+    } else {
+      shm_server.loop(user_name);
+    }
+  }
+#ifdef MIGNIFICIENT_WITH_ICEORYX2
+  else if (shm_server._ipc_backend == mignificient::ipc::IPCBackend::ICEORYX_V2) {
+    shm_server.loop_wait_v2(user_name);
+  }
+#endif
+  else {
+    spdlog::error("Unknown backend type!");
+    abort();
   }
 
   gpuless::MemPoolRead::get_instance().close();

@@ -45,6 +45,7 @@ class CudaTrace {
     std::tuple<it_t, it_t> callStack();
     std::tuple<it_t, it_t> fullCallStack();
     size_t sizeCallStack();
+    size_t sizeCallStackNotSent();
 
     std::map<std::string, std::pair<uint64_t, bool>> &getSymbolToModuleId();
     std::map<uint64_t, std::tuple<void *, uint64_t, bool>> &
