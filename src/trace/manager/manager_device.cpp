@@ -33,6 +33,7 @@
 #include "iceoryx_posh/popo/publisher.hpp"
 #include "iceoryx_posh/popo/subscriber.hpp"
 #include "manager_device.hpp"
+#include "memory_store.hpp"
 
 double serialization_time = 0.0;
 
@@ -896,6 +897,7 @@ void ShmemServer::loop_wait_v2(const char *user_name) {
               instance.lock();
             } else if (code == static_cast<int>(GPUlessMessage::BASIC_EXEC)) {
               instance.basic_exec();
+              MemoryStore::get_instance().print_memory_report();
             } else if (code == static_cast<int>(GPUlessMessage::MEMCPY_ONLY)) {
               instance.memcpy();
             } else if (code == static_cast<int>(GPUlessMessage::FULL_EXEC)) {

@@ -53,13 +53,28 @@ struct MemoryStore
   void swap_out();
   void enable_vmm();
 
+
+  void print_memory_report() const;
+  size_t current_bytes() const { return _current_bytes; }
+  size_t peak_bytes() const { return _peak_bytes; }
+  size_t current_count() const { return _current_count; }
+
 private:
+
+  void on_malloc(size_t size);
+  void on_free(size_t size);
 
   size_t _alloc_granularity = false;
   bool _virtual_memory_management = false;
   CUmemAllocationProp _mem_alloc_prop;
   CUmemAccessDesc _access_desc;
   std::unordered_map<const void*, DataElement> ptrSizeStore;
+
+  // Allocation tracking state
+  size_t _current_bytes = 0;
+  size_t _peak_bytes = 0;
+  size_t _current_count = 0;
+  size_t _peak_count = 0;
 
   // Number of streams to create
   static const int numStreams = 32;

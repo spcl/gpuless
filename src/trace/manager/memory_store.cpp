@@ -39,6 +39,8 @@ void* MemoryStore::create_allocation(size_t size)
 
   ptrSizeStore[reinterpret_cast<void*>(de.devicePtr)] = de;
 
+  on_malloc(size);
+
   return reinterpret_cast<void*>(de.devicePtr);
 }
 
@@ -57,6 +59,8 @@ bool MemoryStore::release_allocation(const void* ptrToRemove)
 
   ptrSizeStore.erase(it);
 
+  on_free(de.size);
+
   return true;
 }
 
@@ -67,6 +71,8 @@ void MemoryStore::add_allocation(void* devicePtr, size_t size)
   de.hostPtr = nullptr;
   de.size = size;
   ptrSizeStore[devicePtr] = de;
+
+  on_malloc(size);
 }
 
 void MemoryStore::remove_allocation(const void* ptrToRemove)
@@ -175,4 +181,27 @@ void MemoryStore::enable_vmm()
 
   _access_desc.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
   _access_desc.flags = CU_MEM_ACCESS_FLAGS_PROT_READWRITE;
+}
+
+void MemoryStore::on_malloc(size_t size)
+{
+  _current_bytes += size;
+  ++_current_count;
+  if (_current_bytes > _peak_bytes) {
+    _peak_bytes = _current_bytes;
+  }
+  if (_current_count > _peak_count) {
+    _peak_count = _current_count;
+  }
+}
+
+void MemoryStore::on_free(size_t size)
+{
+  _current_bytes -= size;
+  --_current_count;
+}
+
+void MemoryStore::print_memory_report() const
+{
+  spdlog::info("Memory Report: {} allocated, {} peak", _current_bytes, _peak_bytes);
 }
