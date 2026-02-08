@@ -20,6 +20,15 @@
 #include "iox2/iceoryx2.hpp"
 #endif
 
+// Must match mignificient::executor::SwapResult layout
+struct SwapResult {
+  static constexpr const char* IOX2_TYPE_NAME = "SwapResult";
+
+  double time_us;
+  size_t memory_bytes;
+  int status;
+};
+
 void manage_device(const std::string& device, uint16_t port);
 void swap_in();
 void swap_out();
@@ -49,7 +58,8 @@ enum class GPUlessMessage {
   SWAP_IN = 5,
 
   REGISTER = 10,
-  SWAP_OFF_CONFIRM = 11
+  SWAP_OFF_CONFIRM = 11,
+  SWAP_IN_CONFIRM = 12
 };
 
 
@@ -166,6 +176,7 @@ struct ShmemServer {
   std::optional<iox2::PortFactoryEvent<iox2::ServiceType::Ipc>> iox2_orchestrator_event_listen;
   std::optional<iox2::Listener<iox2::ServiceType::Ipc>> iox2_orchestrator_listener;
   std::optional<iox2::Notifier<iox2::ServiceType::Ipc>> iox2_orchestrator_notifier;
+
 
 #endif
 

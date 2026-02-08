@@ -488,6 +488,11 @@ void ShmemServer::loop_wait(const char *user_name) {
                          fmt::format("gpuless-{}", user_name).c_str()},
       "Orchestrator", "Receive"}};
 
+  iox::popo::Publisher<SwapResult> swap_result_publisher{iox::capro::ServiceDescription{
+      iox::RuntimeName_t{iox::TruncateToCapacity_t{},
+                         fmt::format("gpuless-{}", user_name).c_str()},
+      "Orchestrator", "SwapResult"}};
+
   iox::popo::WaitSet<> waitset;
 
   SigHandler::waitset_ptr = &waitset;
@@ -574,6 +579,44 @@ void ShmemServer::loop_wait(const char *user_name) {
           } else if (code == static_cast<int>(GPUlessMessage::FULL_EXEC)) {
             instance.exec();
             ++count;
+          } else if (code == static_cast<int>(GPUlessMessage::SWAP_OFF)) {
+            spdlog::info("[Gpuless] Received SWAP_OFF, swapping out GPU memory");
+            auto mem_before = MemoryStore::get_instance().current_bytes();
+            auto start = std::chrono::high_resolution_clock::now();
+            MemoryStore::get_instance().swap_out();
+            auto end = std::chrono::high_resolution_clock::now();
+            double time_us = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+            spdlog::info("[Gpuless] SWAP_OFF completed: {} bytes in {} us", mem_before, time_us);
+
+            swap_result_publisher.loan().and_then([&](auto &sample) {
+              sample->time_us = time_us;
+              sample->memory_bytes = mem_before;
+              sample->status = 0;
+              swap_result_publisher.publish(std::move(sample));
+            });
+            orchestrator_send.loan().and_then([&](auto &payload) {
+              *payload = static_cast<int>(GPUlessMessage::SWAP_OFF_CONFIRM);
+              orchestrator_send.publish(std::move(payload));
+            });
+          } else if (code == static_cast<int>(GPUlessMessage::SWAP_IN)) {
+            spdlog::info("[Gpuless] Received SWAP_IN, swapping in GPU memory");
+            auto start = std::chrono::high_resolution_clock::now();
+            MemoryStore::get_instance().swap_in();
+            auto end = std::chrono::high_resolution_clock::now();
+            double time_us = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+            auto mem_after = MemoryStore::get_instance().current_bytes();
+            spdlog::info("[Gpuless] SWAP_IN completed: {} bytes in {} us", mem_after, time_us);
+
+            swap_result_publisher.loan().and_then([&](auto &sample) {
+              sample->time_us = time_us;
+              sample->memory_bytes = mem_after;
+              sample->status = 0;
+              swap_result_publisher.publish(std::move(sample));
+            });
+            orchestrator_send.loan().and_then([&](auto &payload) {
+              *payload = static_cast<int>(GPUlessMessage::SWAP_IN_CONFIRM);
+              orchestrator_send.publish(std::move(payload));
+            });
           }
 
           val = orchestrator_recv.take();
@@ -628,6 +671,11 @@ void ShmemServer::loop(const char *user_name) {
                          fmt::format("gpuless-{}", user_name).c_str()},
       "Orchestrator", "Receive"}};
 
+  iox::popo::Publisher<SwapResult> swap_result_publisher{iox::capro::ServiceDescription{
+      iox::RuntimeName_t{iox::TruncateToCapacity_t{},
+                         fmt::format("gpuless-{}", user_name).c_str()},
+      "Orchestrator", "SwapResult"}};
+
   SigHandler::quit = false;
   sigint.emplace(iox::registerSignalHandler(iox::PosixSignal::INT,
                                                    SigHandler::sigHandler).expect(""));
@@ -681,6 +729,44 @@ void ShmemServer::loop(const char *user_name) {
         instance.memcpy();
       } else if (code == static_cast<int>(GPUlessMessage::FULL_EXEC)) {
         instance.exec();
+      } else if (code == static_cast<int>(GPUlessMessage::SWAP_OFF)) {
+        spdlog::info("[Gpuless] Received SWAP_OFF, swapping out GPU memory");
+        auto mem_before = MemoryStore::get_instance().current_bytes();
+        auto start = std::chrono::high_resolution_clock::now();
+        MemoryStore::get_instance().swap_out();
+        auto end = std::chrono::high_resolution_clock::now();
+        double time_us = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+        spdlog::info("[Gpuless] SWAP_OFF completed: {} bytes in {} us", mem_before, time_us);
+
+        swap_result_publisher.loan().and_then([&](auto &sample) {
+          sample->time_us = time_us;
+          sample->memory_bytes = mem_before;
+          sample->status = 0;
+          swap_result_publisher.publish(std::move(sample));
+        });
+        orchestrator_send.loan().and_then([&](auto &payload) {
+          *payload = static_cast<int>(GPUlessMessage::SWAP_OFF_CONFIRM);
+          orchestrator_send.publish(std::move(payload));
+        });
+      } else if (code == static_cast<int>(GPUlessMessage::SWAP_IN)) {
+        spdlog::info("[Gpuless] Received SWAP_IN, swapping in GPU memory");
+        auto start = std::chrono::high_resolution_clock::now();
+        MemoryStore::get_instance().swap_in();
+        auto end = std::chrono::high_resolution_clock::now();
+        double time_us = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+        auto mem_after = MemoryStore::get_instance().current_bytes();
+        spdlog::info("[Gpuless] SWAP_IN completed: {} bytes in {} us", mem_after, time_us);
+
+        swap_result_publisher.loan().and_then([&](auto &sample) {
+          sample->time_us = time_us;
+          sample->memory_bytes = mem_after;
+          sample->status = 0;
+          swap_result_publisher.publish(std::move(sample));
+        });
+        orchestrator_send.loan().and_then([&](auto &payload) {
+          *payload = static_cast<int>(GPUlessMessage::SWAP_IN_CONFIRM);
+          orchestrator_send.publish(std::move(payload));
+        });
       }
 
       orch_val = orchestrator_recv.take();
@@ -812,6 +898,20 @@ void ShmemServer::loop_wait_v2(const char *user_name) {
     throw std::runtime_error("Failed to create iceoryx2 listener/notifier");
   }
 
+  auto swap_result_service = node.service_builder(
+      iox2::ServiceName::create(fmt::format("{}.Orchestrator.Gpuless.SwapResult", user_name).c_str()).value())
+  .publish_subscribe<SwapResult>()
+  .max_publishers(1)
+  .max_subscribers(1)
+  .open_or_create();
+  if(!swap_result_service.has_value()) {
+    spdlog::error("Failed to create iceoryx2 service: {}", static_cast<uint64_t>(swap_result_service.error()));
+    spdlog::error("{}", iox2::PublishSubscribeOpenOrCreateError::OpenIncompatibleTypes);
+    throw std::runtime_error("Failed to create iceoryx2 service");
+  }
+
+  auto iox2_swap_result_publisher = std::move(swap_result_service.value().publisher_builder().create().value());
+
   auto res = iox2::WaitSetBuilder()
   .signal_handling_mode(iox2::SignalHandlingMode::HandleTerminationRequests)
   .create<iox2::ServiceType::Ipc>();
@@ -902,6 +1002,50 @@ void ShmemServer::loop_wait_v2(const char *user_name) {
               instance.memcpy();
             } else if (code == static_cast<int>(GPUlessMessage::FULL_EXEC)) {
               instance.exec();
+            } else if (code == static_cast<int>(GPUlessMessage::SWAP_OFF)) {
+              spdlog::info("[Gpuless] Received SWAP_OFF, swapping out GPU memory");
+              auto mem_before = MemoryStore::get_instance().current_bytes();
+              auto start = std::chrono::high_resolution_clock::now();
+              MemoryStore::get_instance().swap_out();
+              auto end = std::chrono::high_resolution_clock::now();
+              double time_us = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+              spdlog::info("[Gpuless] SWAP_OFF completed: {} bytes in {} us", mem_before, time_us);
+
+              {
+                auto sample = iox2_swap_result_publisher.loan_uninit().value();
+                sample.payload_mut().time_us = time_us;
+                sample.payload_mut().memory_bytes = mem_before;
+                sample.payload_mut().status = 0;
+                auto initialized = iox2::assume_init(std::move(sample));
+                iox2::send(std::move(initialized));
+              }
+              auto res = iox2_orchestrator_notifier->notify_with_custom_event_id(
+                iox2::EventId{static_cast<int>(GPUlessMessage::SWAP_OFF_CONFIRM)});
+              if(!res.has_value()) {
+                spdlog::error("Failed to send SWAP_OFF_CONFIRM: {}", static_cast<uint64_t>(res.error()));
+              }
+            } else if (code == static_cast<int>(GPUlessMessage::SWAP_IN)) {
+              spdlog::info("[Gpuless] Received SWAP_IN, swapping in GPU memory");
+              auto start = std::chrono::high_resolution_clock::now();
+              MemoryStore::get_instance().swap_in();
+              auto end = std::chrono::high_resolution_clock::now();
+              double time_us = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+              auto mem_after = MemoryStore::get_instance().current_bytes();
+              spdlog::info("[Gpuless] SWAP_IN completed: {} bytes in {} us", mem_after, time_us);
+
+              {
+                auto sample = iox2_swap_result_publisher.loan_uninit().value();
+                sample.payload_mut().time_us = time_us;
+                sample.payload_mut().memory_bytes = mem_after;
+                sample.payload_mut().status = 0;
+                auto initialized = iox2::assume_init(std::move(sample));
+                iox2::send(std::move(initialized));
+              }
+              auto res = iox2_orchestrator_notifier->notify_with_custom_event_id(
+                iox2::EventId{static_cast<int>(GPUlessMessage::SWAP_IN_CONFIRM)});
+              if(!res.has_value()) {
+                spdlog::error("Failed to send SWAP_IN_CONFIRM: {}", static_cast<uint64_t>(res.error()));
+              }
             }
 
           event_res = iox2_orchestrator_listener->try_wait_one();
