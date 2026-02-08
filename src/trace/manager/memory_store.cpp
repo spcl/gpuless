@@ -111,6 +111,7 @@ void MemoryStore::swap_in()
     CUmemAccessDesc accessDesc;
     accessDesc.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
     accessDesc.flags = CU_MEM_ACCESS_FLAGS_PROT_READWRITE;
+    accessDesc.location.id = 0;
     CHECK_CUDA(cuMemSetAccess(de.devicePtr, de.size, &accessDesc, 1));
 
     auto ret = cudaMemcpyAsync(
@@ -119,12 +120,11 @@ void MemoryStore::swap_in()
       cudaMemcpyHostToDevice,
       streams[streamIdx % numStreams]
     );
-    SPDLOG_DEBUG("MemcpyAsyncTo {} {} {}", fmt::ptr(reinterpret_cast<void*>(de.devicePtr)), de.size, ret);
+    SPDLOG_DEBUG("MemcpyAsyncTo from {} to {} size {} ret {} stream {}", fmt::ptr(reinterpret_cast<void*>(de.hostPtr)), fmt::ptr(reinterpret_cast<void*>(de.devicePtr)), de.size, ret, streamIdx % numStreams);
     streamIdx += 1;
   }
 
-  auto ret = cudaDeviceSynchronize();
-  spdlog::error("Synchronize {}", ret);
+  CHECK_CUDA_E(cudaDeviceSynchronize());
 
   for (auto& [devPtr, de] : ptrSizeStore) {
     cudaFreeHost(de.hostPtr);
@@ -155,11 +155,11 @@ void MemoryStore::swap_out()
       cudaMemcpyDeviceToHost,
       streams[streamIdx % numStreams]
     );
-    SPDLOG_DEBUG("MemcpyAsyncFrom {} {} {}", fmt::ptr(reinterpret_cast<void*>(buffer.devicePtr)), buffer.size, ret);
+    SPDLOG_DEBUG("MemcpyAsyncTo from {} to {} size {} ret {} stream {}", fmt::ptr(reinterpret_cast<void*>(buffer.devicePtr)), fmt::ptr(reinterpret_cast<void*>(buffer.hostPtr)), buffer.size, ret, streamIdx % numStreams);
     streamIdx += 1;
   }
 
-  auto ret = cudaDeviceSynchronize();
+  CHECK_CUDA_E(cudaDeviceSynchronize());
 
   for (auto& [devPtr, de] : ptrSizeStore) {
     CHECK_CUDA(cuMemUnmap(de.devicePtr, de.size));

@@ -25,6 +25,13 @@ struct DataElement
   }\
 }
 
+#define CHECK_CUDA_E(call) {\
+  cudaError_t result = call;\
+  if (result != cudaSuccess) {\
+      printf("[%d] CUDA Error: %s\n", __LINE__, cudaGetErrorString(result));\
+  }\
+}
+
 struct MemoryStore
 {
 
