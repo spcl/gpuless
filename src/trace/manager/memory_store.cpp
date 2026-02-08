@@ -155,7 +155,7 @@ void MemoryStore::swap_out()
       buffer.hostPtr, reinterpret_cast<void*>(buffer.devicePtr), buffer.size,
       cudaMemcpyDeviceToHost,
       streams[streamIdx % numStreams]
-    )
+    );
     CHECK_CUDA_E(ret);
     SPDLOG_DEBUG("MemcpyAsyncTo from {} to {} size {} ret {} stream {}", fmt::ptr(reinterpret_cast<void*>(buffer.devicePtr)), fmt::ptr(reinterpret_cast<void*>(buffer.hostPtr)), buffer.size, ret, streamIdx % numStreams);
     streamIdx += 1;
