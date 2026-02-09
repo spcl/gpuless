@@ -669,6 +669,7 @@ void ShmemServer::loop_wait(const char *user_name) {
           } else if (code == static_cast<int>(GPUlessMessage::INVOCATION_FINISH)) {
             spdlog::info("Received INVOCATION_FINISH, running final memory check");
             MemoryStore::get_instance().check_memory_final();
+            MemoryStore::get_instance().print_memory_report();
           } else if (code == static_cast<int>(GPUlessMessage::SWAP_OFF)) {
             spdlog::info("[Gpuless] Received SWAP_OFF, swapping out GPU memory");
             auto mem_before = MemoryStore::get_instance().current_bytes();
@@ -844,6 +845,7 @@ void ShmemServer::loop(const char *user_name) {
       } else if (code == static_cast<int>(GPUlessMessage::INVOCATION_FINISH)) {
         spdlog::info("Received INVOCATION_FINISH, running final memory check");
         MemoryStore::get_instance().check_memory_final();
+        MemoryStore::get_instance().print_memory_report();
       } else if (code == static_cast<int>(GPUlessMessage::SWAP_OFF)) {
         spdlog::info("[Gpuless] Received SWAP_OFF, swapping out GPU memory");
         auto mem_before = MemoryStore::get_instance().current_bytes();
@@ -1142,6 +1144,7 @@ void ShmemServer::loop_wait_v2(const char *user_name) {
             } else if (code == static_cast<int>(GPUlessMessage::INVOCATION_FINISH)) {
               spdlog::info("Received INVOCATION_FINISH, running final memory check");
               MemoryStore::get_instance().check_memory_final();
+              MemoryStore::get_instance().print_memory_report();
             } else if (code == static_cast<int>(GPUlessMessage::SWAP_OFF)) {
               spdlog::info("[Gpuless] Received SWAP_OFF, swapping out GPU memory");
               auto mem_before = MemoryStore::get_instance().current_bytes();
