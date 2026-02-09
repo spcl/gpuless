@@ -9,6 +9,7 @@
 
 #include "manager/manager_device.hpp"
 #include "shmem/mempool.hpp"
+#include "manager/memory_store.hpp"
 
 namespace gpuless {
 

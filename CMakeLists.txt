@@ -109,6 +109,7 @@ target_link_libraries(manager_trace
     flatbuffers
     iceoryx_posh::iceoryx_posh
     mignificient_common
+    nvidia-ml
 )
 
 if(BUILD_SHMEM)
@@ -154,6 +155,7 @@ target_link_libraries(manager_device
     flatbuffers
     iceoryx_posh::iceoryx_posh
     mignificient_common
+    nvidia-ml
 )
 
 if(BUILD_SHMEM)

@@ -474,7 +474,7 @@ CudnnGetConvolutionForwardAlgorithmV7::CudnnGetConvolutionForwardAlgorithmV7(
         perf.reserved[2] = p->reserved()->Get(2);
         this->perf_results.push_back(perf);
     }
-    this->perf_results.resize(requested_algo_count);
+    //this->perf_results.resize(requested_algo_count);
 }
 
 /*
@@ -744,10 +744,10 @@ CudnnConvolutionBackwardData::CudnnConvolutionBackwardData(
     const FBCudaApiCall *fb_cuda_api_call) {
     auto c = fb_cuda_api_call->api_call_as_FBCudnnConvolutionBackwardData();
     this->virtual_handle = c->virtual_handle();
-    this->alpha.resize(c->alpha()->size());
+    //this->alpha.resize(c->alpha()->size());
     this->alpha.insert(this->alpha.begin(), c->alpha()->begin(),
                        c->alpha()->end());
-    this->beta.resize(c->beta()->size());
+    //this->beta.resize(c->beta()->size());
     this->beta.insert(this->beta.begin(), c->beta()->begin(), c->beta()->end());
     this->virtual_fd_wdesc = c->virtual_fd_wdesc();
     this->w = reinterpret_cast<const void *>(c->w());
@@ -1053,10 +1053,10 @@ CudnnBatchNormalizationForwardTrainingEx::
     this->virtual_handle = c->virtual_handle();
     this->mode = static_cast<cudnnBatchNormMode_t>(c->mode());
     this->bn_ops = static_cast<cudnnBatchNormOps_t>(c->bn_ops());
-    this->alpha.resize(c->alpha()->size());
+    //this->alpha.resize(c->alpha()->size());
     this->alpha.insert(this->alpha.begin(), c->alpha()->begin(),
                        c->alpha()->end());
-    this->beta.resize(c->beta()->size());
+    //this->beta.resize(c->beta()->size());
     this->beta.insert(this->beta.begin(), c->beta()->begin(), c->beta()->end());
     this->virtual_td_xdesc = c->virtual_td_xdesc();
     this->x_data = reinterpret_cast<const void *>(c->x_data());
@@ -1080,7 +1080,7 @@ CudnnBatchNormalizationForwardTrainingEx::
     this->workspace = reinterpret_cast<void *>(c->workspace());
     this->workspace_size_in_bytes = c->workspace_size_in_bytes();
     this->reserve_space = reinterpret_cast<void *>(c->reserve_space());
-    this->reserve_space_size_in_bytes = c->workspace_size_in_bytes();
+    this->reserve_space_size_in_bytes = c->reserve_space_size_in_bytes();
 }
 
 uint64_t CudnnBatchNormalizationForwardTrainingEx::executeNative(
