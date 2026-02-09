@@ -257,7 +257,7 @@ cudnnStatus_t cudnnGetConvolutionBackwardDataAlgorithm_v7(
     *returnedAlgoCount = top->returned_algo_count;
     std::memcpy(perfResults, top->perf_results.data(),
                 top->returned_algo_count *
-                    sizeof(cudnnConvolutionFwdAlgoPerf_t));
+                    sizeof(cudnnConvolutionBwdDataAlgoPerf_t));
 
     return CUDNN_STATUS_SUCCESS;
 }
