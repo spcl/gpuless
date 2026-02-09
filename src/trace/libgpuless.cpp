@@ -17,6 +17,7 @@
 #include "trace_executor_local.hpp"
 #include "trace_executor_tcp_client.hpp"
 #include "trace_executor_shmem_client.hpp"
+#include "shmem/memcpy_stats.hpp"
 
 using namespace gpuless;
 
@@ -218,6 +219,11 @@ static void exitHandler() {
 
 extern "C" {
 
+void mignificient_memcpy_stats_print_and_reset()
+{
+  MemcpyCopyStats::instance().print_and_reset();
+}
+
 void* mignificient_malloc(size_t size)
 {
   getTraceExecutor();
@@ -335,7 +341,12 @@ cudaError_t cudaMemcpy(void *dst, const void *src, size_t count,
             auto chunk = pool->get(count);
             SPDLOG_DEBUG("Get pool chunk {}", chunk.name);
             auto rec = std::make_shared<CudaMemcpyH2D>(dst, src, count, chunk.name);
-            std::memcpy(chunk.ptr, src, count);
+            {
+              auto t0 = std::chrono::high_resolution_clock::now();
+              std::memcpy(chunk.ptr, src, count);
+              auto t1 = std::chrono::high_resolution_clock::now();
+              MemcpyCopyStats::instance().record_h2d(count, std::chrono::duration<double, std::micro>(t1 - t0).count());
+            }
             getCudaTrace().record(rec);
           }
 
@@ -343,7 +354,12 @@ cudaError_t cudaMemcpy(void *dst, const void *src, size_t count,
           auto rec = std::make_shared<CudaMemcpyH2D>(dst, src, count);
 
           // Host side - we copy the data for sending
-          std::memcpy(rec->buffer.data(), src, count);
+          {
+            auto t0 = std::chrono::high_resolution_clock::now();
+            std::memcpy(rec->buffer.data(), src, count);
+            auto t1 = std::chrono::high_resolution_clock::now();
+            MemcpyCopyStats::instance().record_h2d(count, std::chrono::duration<double, std::micro>(t1 - t0).count());
+          }
           getCudaTrace().record(rec);
         }
 
@@ -370,7 +386,12 @@ cudaError_t cudaMemcpy(void *dst, const void *src, size_t count,
             getTraceExecutor()->synchronize(getCudaTrace());
 
             // Host side - we copy the received data
-            std::memcpy(dst, chunk.ptr, count);
+            {
+              auto t0 = std::chrono::high_resolution_clock::now();
+              std::memcpy(dst, chunk.ptr, count);
+              auto t1 = std::chrono::high_resolution_clock::now();
+              MemcpyCopyStats::instance().record_d2h(count, std::chrono::duration<double, std::micro>(t1 - t0).count());
+            }
 
             pool->give(chunk.name);
           }
@@ -384,7 +405,12 @@ cudaError_t cudaMemcpy(void *dst, const void *src, size_t count,
 
           std::shared_ptr<CudaMemcpyD2H> top =
             (const std::shared_ptr<CudaMemcpyD2H> &)getCudaTrace().historyTop();
-          std::memcpy(dst, top->buffer_ptr, count);
+          {
+            auto t0 = std::chrono::high_resolution_clock::now();
+            std::memcpy(dst, top->buffer_ptr, count);
+            auto t1 = std::chrono::high_resolution_clock::now();
+            MemcpyCopyStats::instance().record_d2h(count, std::chrono::duration<double, std::micro>(t1 - t0).count());
+          }
         }
 
         //        auto *dstb = reinterpret_cast<uint8_t *>(dst);
@@ -414,14 +440,24 @@ cudaError_t cudaMemcpyAsync(void *dst, const void *src, size_t count,
 
           auto chunk = pool->get(count);
           auto rec = std::make_shared<CudaMemcpyAsyncH2D>(dst, src, count, stream, chunk.name);
-          std::memcpy(chunk.ptr, src, count);
+          {
+            auto t0 = std::chrono::high_resolution_clock::now();
+            std::memcpy(chunk.ptr, src, count);
+            auto t1 = std::chrono::high_resolution_clock::now();
+            MemcpyCopyStats::instance().record_h2d(count, std::chrono::duration<double, std::micro>(t1 - t0).count());
+          }
 
           getCudaTrace().record(rec);
         } else {
           auto rec = std::make_shared<CudaMemcpyAsyncH2D>(dst, src, count, stream);
 
           // Host side - we copy the data for sending
-          std::memcpy(rec->buffer.data(), src, count);
+          {
+            auto t0 = std::chrono::high_resolution_clock::now();
+            std::memcpy(rec->buffer.data(), src, count);
+            auto t1 = std::chrono::high_resolution_clock::now();
+            MemcpyCopyStats::instance().record_h2d(count, std::chrono::duration<double, std::micro>(t1 - t0).count());
+          }
           getCudaTrace().record(rec);
         }
 
@@ -439,7 +475,12 @@ cudaError_t cudaMemcpyAsync(void *dst, const void *src, size_t count,
           getTraceExecutor()->synchronize(getCudaTrace());
 
           // Host side - we copy the received data
-          std::memcpy(dst, chunk.ptr, count);
+          {
+            auto t0 = std::chrono::high_resolution_clock::now();
+            std::memcpy(dst, chunk.ptr, count);
+            auto t1 = std::chrono::high_resolution_clock::now();
+            MemcpyCopyStats::instance().record_d2h(count, std::chrono::duration<double, std::micro>(t1 - t0).count());
+          }
 
           pool->give(chunk.name);
 
@@ -454,7 +495,12 @@ cudaError_t cudaMemcpyAsync(void *dst, const void *src, size_t count,
           std::shared_ptr<CudaMemcpyAsyncD2H> top =
               (const std::shared_ptr<CudaMemcpyAsyncD2H> &)getCudaTrace()
                   .historyTop();
-          std::memcpy(dst, top->buffer_ptr, count);
+          {
+            auto t0 = std::chrono::high_resolution_clock::now();
+            std::memcpy(dst, top->buffer_ptr, count);
+            auto t1 = std::chrono::high_resolution_clock::now();
+            MemcpyCopyStats::instance().record_d2h(count, std::chrono::duration<double, std::micro>(t1 - t0).count());
+          }
         }
         //        auto *dstb = reinterpret_cast<uint8_t *>(dst);
         //        SPDLOG_DEBUG("cudaMemcpyAsyncD2H memory probe: {:x} {:x} {:x}
