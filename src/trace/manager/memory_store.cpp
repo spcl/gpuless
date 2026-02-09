@@ -99,7 +99,6 @@ MemoryCheckResult MemoryStore::check_memory(const char* api_call_name)
   }
 
 
-  std::cerr << _max_gpu_memory << " " <<  new_memory << std::endl;
   if (_max_gpu_memory > 0 && new_memory > _max_gpu_memory) {
     spdlog::error("OOM detected after {}: nvml={} > max={}",
                   api_call_name, new_memory, _max_gpu_memory);
