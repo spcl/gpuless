@@ -1,6 +1,7 @@
 #ifndef __MANAGER_DEVICE_HPP__
 #define __MANAGER_DEVICE_HPP__
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -59,7 +60,10 @@ enum class GPUlessMessage {
 
   REGISTER = 10,
   SWAP_OFF_CONFIRM = 11,
-  SWAP_IN_CONFIRM = 12
+  SWAP_IN_CONFIRM = 12,
+
+  OUT_OF_MEMORY = 13,
+  INVOCATION_FINISH = 14
 };
 
 
@@ -196,6 +200,8 @@ struct ShmemServer {
 
   void _send_response(const flatbuffers::FlatBufferBuilder& builder, const void* requestPayload);
   void _release_request(const void* requestPayload);
+
+  std::atomic<bool> _oom_detected{false};
 
   double _sum = 0;
 

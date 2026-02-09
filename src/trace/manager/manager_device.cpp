@@ -34,6 +34,8 @@
 #include "iceoryx_posh/popo/subscriber.hpp"
 #include "manager_device.hpp"
 #include "memory_store.hpp"
+#include "../cudnn_api_calls.hpp"
+#include "../cublas_api_calls.hpp"
 
 double serialization_time = 0.0;
 
@@ -143,6 +145,7 @@ handle_execute_request(const gpuless::FBProtocolMessage *msg, int socket_fd) {
 
   // for(size_t idx = 0; idx < callstack.size(); ++idx)
   int idx = 0;
+  bool has_likely_call = false;
   for (; begin != end; ++begin) {
     // auto &apiCall = callstack[idx];
     auto &apiCall = *begin;
@@ -175,7 +178,30 @@ handle_execute_request(const gpuless::FBProtocolMessage *msg, int socket_fd) {
       std::exit(EXIT_FAILURE);
     }
 
+#if defined(MIGNIFICIENT_WITH_MEMORY_PROFILING)
+    // Profiling mode: check after every API call
+    {
+      auto mem_result = MemoryStore::get_instance().check_memory(typeid(*apiCall).name());
+      if (mem_result == MemoryCheckResult::OOM) {
+        return std::nullopt;
+      }
+    }
+#else
+    if (MemoryStore::is_must_call(apiCall.get())) {
+      auto mem_result = MemoryStore::get_instance().check_memory(typeid(*apiCall).name());
+      if (mem_result == MemoryCheckResult::OOM) {
+        return std::nullopt;
+      }
+    } else if (MemoryStore::is_likely_call(apiCall.get())) {
+      has_likely_call = true;
+    }
+#endif
+
     ++idx;
+  }
+
+  if (has_likely_call) {
+    MemoryStore::get_instance().signal_likely_check();
   }
 
   cuda_trace.markSynchronized();
@@ -221,6 +247,7 @@ finish_trace_execution(int last_idx) {
                 std::distance(begin, end));
   std::advance(begin, last_idx);
   size_t idx = 0;
+  bool has_likely_call = false;
   // for(size_t idx = last_idx; idx < callstack.size(); ++idx)
   for (; begin != end; ++begin) {
     // auto &apiCall = callstack[idx];
@@ -251,6 +278,29 @@ finish_trace_execution(int last_idx) {
                    apiCall->nativeErrorToString(err), err);
       std::exit(EXIT_FAILURE);
     }
+
+#if defined(MIGNIFICIENT_WITH_MEMORY_PROFILING)
+    // Profiling mode: check after every API call
+    {
+      auto mem_result = MemoryStore::get_instance().check_memory(typeid(*apiCall).name());
+      if (mem_result == MemoryCheckResult::OOM) {
+        return std::nullopt;
+      }
+    }
+#else
+    if (MemoryStore::is_must_call(apiCall.get())) {
+      auto mem_result = MemoryStore::get_instance().check_memory(typeid(*apiCall).name());
+      if (mem_result == MemoryCheckResult::OOM) {
+        return std::nullopt;
+      }
+    } else if (MemoryStore::is_likely_call(apiCall.get())) {
+      has_likely_call = true;
+    }
+#endif
+  }
+
+  if (has_likely_call) {
+    MemoryStore::get_instance().signal_likely_check();
   }
 
   cuda_trace.markSynchronized();
@@ -331,6 +381,14 @@ bool ShmemServer::_process_remainder() {
 
     return true;
   } else {
+
+    // Check if this was an OOM condition
+    if (MemoryStore::get_instance().is_oom()) {
+      _oom_detected.store(true, std::memory_order_release);
+      const void *requestPayload = instance.load_payload();
+      _release_request(requestPayload);
+    }
+
     return false;
   }
 }
@@ -459,6 +517,13 @@ bool ShmemServer::_process_client(const void *requestPayload) {
     return true;
   } else {
 
+    // Check if this was an OOM condition vs a blocked call
+    if (MemoryStore::get_instance().is_oom()) {
+      _oom_detected.store(true, std::memory_order_release);
+      _release_request(requestPayload);
+      return false;
+    }
+
     ExecutionStatus::instance().save_payload(requestPayload);
 
     return false;
@@ -525,6 +590,17 @@ void ShmemServer::loop_wait(const char *user_name) {
   int idx = 0;
   while (!SigHandler::quit) {
 
+    // Check if background thread detected OOM
+    if (_oom_detected.load(std::memory_order_acquire)) {
+      spdlog::error("OOM detected, sending OUT_OF_MEMORY to orchestrator");
+      orchestrator_send.loan().and_then([&](auto &payload) {
+        *payload = static_cast<int>(GPUlessMessage::OUT_OF_MEMORY);
+        orchestrator_send.publish(std::move(payload));
+      });
+      SigHandler::quit = true;
+      break;
+    }
+
     auto notificationVector = waitset.wait();
     // const void* pendingPayload = nullptr;
 
@@ -555,6 +631,17 @@ void ShmemServer::loop_wait(const char *user_name) {
               .or_else([&](auto &res) { no_more = true; });
         }
 
+        // Check OOM after processing client requests
+        if (_oom_detected.load(std::memory_order_acquire)) {
+          spdlog::error("OOM detected after processing client, sending OUT_OF_MEMORY to orchestrator");
+          orchestrator_send.loan().and_then([&](auto &payload) {
+            *payload = static_cast<int>(GPUlessMessage::OUT_OF_MEMORY);
+            orchestrator_send.publish(std::move(payload));
+          });
+          SigHandler::quit = true;
+          break;
+        }
+
         SPDLOG_INFO("Received {} requests", idx);
         //MemoryStore::get_instance().print_stats();
 
@@ -579,6 +666,9 @@ void ShmemServer::loop_wait(const char *user_name) {
           } else if (code == static_cast<int>(GPUlessMessage::FULL_EXEC)) {
             instance.exec();
             ++count;
+          } else if (code == static_cast<int>(GPUlessMessage::INVOCATION_FINISH)) {
+            spdlog::info("Received INVOCATION_FINISH, running final memory check");
+            MemoryStore::get_instance().check_memory_final();
           } else if (code == static_cast<int>(GPUlessMessage::SWAP_OFF)) {
             spdlog::info("[Gpuless] Received SWAP_OFF, swapping out GPU memory");
             auto mem_before = MemoryStore::get_instance().current_bytes();
@@ -693,6 +783,17 @@ void ShmemServer::loop(const char *user_name) {
 
   while (!SigHandler::quit) {
 
+    // Check if background thread detected OOM
+    if (_oom_detected.load(std::memory_order_acquire)) {
+      spdlog::error("OOM detected, sending OUT_OF_MEMORY to orchestrator");
+      orchestrator_send.loan().and_then([&](auto &payload) {
+        *payload = static_cast<int>(GPUlessMessage::OUT_OF_MEMORY);
+        orchestrator_send.publish(std::move(payload));
+      });
+      SigHandler::quit = true;
+      break;
+    }
+
     bool had_activity = false;
 
     // Poll for client requests
@@ -713,6 +814,17 @@ void ShmemServer::loop(const char *user_name) {
       val = client_subscriber->take();
     }
 
+    // Check OOM after processing client requests
+    if (_oom_detected.load(std::memory_order_acquire)) {
+      spdlog::error("OOM detected after processing client, sending OUT_OF_MEMORY to orchestrator");
+      orchestrator_send.loan().and_then([&](auto &payload) {
+        *payload = static_cast<int>(GPUlessMessage::OUT_OF_MEMORY);
+        orchestrator_send.publish(std::move(payload));
+      });
+      SigHandler::quit = true;
+      break;
+    }
+
     // Poll for orchestrator messages
     auto orch_val = orchestrator_recv.take();
     while (!orch_val.has_error()) {
@@ -729,6 +841,9 @@ void ShmemServer::loop(const char *user_name) {
         instance.memcpy();
       } else if (code == static_cast<int>(GPUlessMessage::FULL_EXEC)) {
         instance.exec();
+      } else if (code == static_cast<int>(GPUlessMessage::INVOCATION_FINISH)) {
+        spdlog::info("Received INVOCATION_FINISH, running final memory check");
+        MemoryStore::get_instance().check_memory_final();
       } else if (code == static_cast<int>(GPUlessMessage::SWAP_OFF)) {
         spdlog::info("[Gpuless] Received SWAP_OFF, swapping out GPU memory");
         auto mem_before = MemoryStore::get_instance().current_bytes();
@@ -953,6 +1068,17 @@ void ShmemServer::loop_wait_v2(const char *user_name) {
   auto loop_res = iox2_waitset.wait_and_process(
     [&](iox2::WaitSetAttachmentId<iox2::ServiceType::Ipc> attachment_id) {
 
+      // Check if background thread detected OOM
+      if (_oom_detected.load(std::memory_order_acquire)) {
+        spdlog::error("OOM detected, sending OUT_OF_MEMORY to orchestrator");
+        auto res = iox2_orchestrator_notifier->notify_with_custom_event_id(
+          iox2::EventId{static_cast<int>(GPUlessMessage::OUT_OF_MEMORY)});
+        if(!res.has_value()) {
+          spdlog::error("Failed to send OUT_OF_MEMORY: {}", static_cast<uint64_t>(res.error()));
+        }
+        return iox2::CallbackProgression::Stop;
+      }
+
       if(attachment_id.has_event_from(client_guard)) {
 
         bool no_more = false;
@@ -981,6 +1107,17 @@ void ShmemServer::loop_wait_v2(const char *user_name) {
           event_res = iox2_client_listener->try_wait_one();
         }
 
+        // Check OOM after processing client requests
+        if (_oom_detected.load(std::memory_order_acquire)) {
+          spdlog::error("OOM detected after processing client, sending OUT_OF_MEMORY to orchestrator");
+          auto res = iox2_orchestrator_notifier->notify_with_custom_event_id(
+            iox2::EventId{static_cast<int>(GPUlessMessage::OUT_OF_MEMORY)});
+          if(!res.has_value()) {
+            spdlog::error("Failed to send OUT_OF_MEMORY: {}", static_cast<uint64_t>(res.error()));
+          }
+          return iox2::CallbackProgression::Stop;
+        }
+
         SPDLOG_INFO("Received {} requests", idx);
 
       } else if(attachment_id.has_event_from(orchestrator_guard)) {
@@ -1002,6 +1139,9 @@ void ShmemServer::loop_wait_v2(const char *user_name) {
               instance.memcpy();
             } else if (code == static_cast<int>(GPUlessMessage::FULL_EXEC)) {
               instance.exec();
+            } else if (code == static_cast<int>(GPUlessMessage::INVOCATION_FINISH)) {
+              spdlog::info("Received INVOCATION_FINISH, running final memory check");
+              MemoryStore::get_instance().check_memory_final();
             } else if (code == static_cast<int>(GPUlessMessage::SWAP_OFF)) {
               spdlog::info("[Gpuless] Received SWAP_OFF, swapping out GPU memory");
               auto mem_before = MemoryStore::get_instance().current_bytes();
@@ -1078,6 +1218,7 @@ void ShmemServer::loop_wait_v2(const char *user_name) {
   spdlog::info("Finished iceoryx2 event loop with status {}", loop_res.value());
   spdlog::info("Received {} requests", idx);
 
+  MemoryStore::get_instance().print_memory_report();
 }
 #endif
 
@@ -1192,8 +1333,23 @@ void manage_device_shmem(const std::string &device, const std::string &app_name,
     spdlog::error("Using traditional memory allocations in CUDA!");
   }
 
+  // Read max GPU memory from environment
+  const char* max_mem_env = std::getenv("MIGNIFICIENT_MAX_GPU_MEMORY");
+  if (max_mem_env) {
+    float max_memory_mb = std::stof(max_mem_env);
+    size_t max_memory_bytes = static_cast<size_t>(max_memory_mb * 1024 * 1024);
+    MemoryStore::get_instance().set_max_memory(max_memory_bytes);
+  }
+
   // initialize cuda device pre-emptively
   getCudaVirtualDevice().initRealDevice();
+
+  MemoryStore::get_instance().nvml_used_memory();
+
+#if defined(MIGNIFICIENT_WITH_PROFILING)
+  spdlog::info("Memory consumption after initializing CUDA context.");
+  MemoryStore::get_instance().print_memory_report();
+#endif
 
   if (shm_server._ipc_backend == mignificient::ipc::IPCBackend::ICEORYX_V1) {
     if (std::string_view{poll_type} == "wait") {
