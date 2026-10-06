@@ -24,7 +24,7 @@ class TraceExecutor {
 
     size_t totalMem() const { return this->device_total_mem; }
     int32_t deviceAttribute(CUdevice_attribute attribute) {
-        if (device_attributes.size() < static_cast<unsigned>(attribute)) {
+        if (static_cast<size_t>(attribute) >= device_attributes.size()) {
             SPDLOG_ERROR("Device attribute {} not stored", attribute);
             std::exit(EXIT_FAILURE);
         }
