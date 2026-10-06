@@ -273,6 +273,19 @@ constexpr auto SERVER_WAIT_LIMIT = std::chrono::seconds(30);
   spdlog::default_logger()->flush();
   std::abort();
 }
+#ifdef MIGNIFICIENT_WITH_ICEORYX2
+// The wait set swallows SIGTERM/SIGINT and reports them; without this check the
+// response loops would retry forever and the process could not be stopped.
+// _Exit: atexit handlers would try to talk to the server again.
+void exit_on_signal(const iox2::bb::Expected<iox2::WaitSetRunResult, iox2::WaitSetRunError> &res) {
+  if (res.has_value() && (res.value() == iox2::WaitSetRunResult::TerminationRequest ||
+                          res.value() == iox2::WaitSetRunResult::Interrupt)) {
+    spdlog::error("gpuless: termination requested while waiting for the gpuless server; exiting");
+    spdlog::default_logger()->flush();
+    std::_Exit(EXIT_FAILURE);
+  }
+}
+#endif
 } // namespace
 
 // The server may start after the client (e.g. a Python function importing torch
@@ -519,6 +532,7 @@ void TraceExecutorShmem::receive_pending_responses(bool blocking) {
       loop_result = iox2_waitset->wait_and_process_once_with_timeout(on_event, iox2::bb::Duration::from_micros(1));
     }
 
+    exit_on_signal(loop_result);
     if(!loop_result.has_value()) {
       spdlog::error("iceoryx2: Waitset processing error: {}", static_cast<uint64_t>(loop_result.error()));
     }
@@ -947,11 +961,16 @@ bool TraceExecutorShmem::getDeviceAttributes() {
       // deadline here: the server holds requests until the orchestrator
       // enables execution (first invocation), which can take arbitrarily long.
       // Fail only when the server is gone; check that once per second.
+      // Note: a server that exits cleanly removes its ports and is detected;
+      // a crashed (SIGKILL/SIGSEGV) server leaves stale ports in the iceoryx2
+      // dynamic config, so that case still waits (the orchestrator's function
+      // timeout covers it).
       auto start = std::chrono::steady_clock::now();
       auto next_warning = SERVER_WAIT_LIMIT;
       while (last_synchronized < last_sent) {
         auto loop_result = waitset.wait_and_process_once_with_timeout(
             on_event, iox2::bb::Duration::from_secs(1));
+        exit_on_signal(loop_result);
         if (!loop_result.has_value()) {
           spdlog::error("iceoryx2: WaitSet loop error: {}", static_cast<uint64_t>(loop_result.error()));
         }
