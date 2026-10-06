@@ -216,7 +216,6 @@ add_dependencies(gpuless spdlog)
 target_link_libraries(gpuless
     iberty
     stdc++fs
-    cudnn
     spdlog::spdlog
     CUDA::cuda_driver
     CUDA::cudart
