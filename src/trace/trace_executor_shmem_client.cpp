@@ -265,8 +265,7 @@ TraceExecutorShmem::~TraceExecutorShmem()
 }
 
 namespace {
-// How long the client waits for the gpuless server to come up or to answer
-// the device attribute request.
+// How long the client waits for the gpuless server's endpoints to appear.
 constexpr auto SERVER_WAIT_LIMIT = std::chrono::seconds(30);
 
 [[noreturn]] void fatal(const std::string &msg) {
@@ -280,20 +279,20 @@ constexpr auto SERVER_WAIT_LIMIT = std::chrono::seconds(30);
 // at module level). A request published before the server's subscriber and
 // listener exist is dropped, and the client would then wait forever. So wait
 // until they exist, polling with backoff (1 ms doubling to 100 ms).
-bool TraceExecutorShmem::wait_for_server() {
-  auto server_ready = [this]() -> bool {
+bool TraceExecutorShmem::server_connected() {
 #ifdef MIGNIFICIENT_WITH_ICEORYX2
-    if (_ipc_backend == mignificient::ipc::IPCBackend::ICEORYX_V2) {
-      return iox2_request_service->dynamic_config().number_of_subscribers() > 0 &&
-             iox2_event_notifier->dynamic_config().number_of_listeners() > 0;
-    }
+  if (_ipc_backend == mignificient::ipc::IPCBackend::ICEORYX_V2) {
+    return iox2_request_service->dynamic_config().number_of_subscribers() > 0 &&
+           iox2_event_notifier->dynamic_config().number_of_listeners() > 0;
+  }
 #endif
-    return request_publisher->hasSubscribers();
-  };
+  return request_publisher->hasSubscribers();
+}
 
+bool TraceExecutorShmem::wait_for_server() {
   auto start = std::chrono::steady_clock::now();
   auto backoff = std::chrono::milliseconds(1);
-  while (!server_ready()) {
+  while (!server_connected()) {
     if (std::chrono::steady_clock::now() - start >= SERVER_WAIT_LIMIT) {
       spdlog::error("gpuless: no gpuless server for {} after {} s; is manager_device running for this client?",
                     std::getenv("CONTAINER_NAME") ? std::getenv("CONTAINER_NAME") : "null",
@@ -361,7 +360,9 @@ void TraceExecutorShmem::send_request_iox2(flatbuffers::FlatBufferBuilder &build
 bool TraceExecutorShmem::init(const char *ip, const short port,
                             manager::instance_profile profile) {
 
-    this->getDeviceAttributes();
+    if (!this->getDeviceAttributes()) {
+        return false;
+    }
 
     if (_ipc_backend == mignificient::ipc::IPCBackend::ICEORYX_V1) {
         // iceoryx1: spawn background thread that waits on waitset and enqueues results
@@ -512,7 +513,8 @@ void TraceExecutorShmem::receive_pending_responses(bool blocking) {
 
     iox2::bb::Expected<iox2::WaitSetRunResult, iox2::WaitSetRunError> loop_result;
     if(blocking) {
-      loop_result = iox2_waitset->wait_and_process_once(on_event);
+      // Wake up once per second so callers can check that the server is still there.
+      loop_result = iox2_waitset->wait_and_process_once_with_timeout(on_event, iox2::bb::Duration::from_secs(1));
     } else {
       loop_result = iox2_waitset->wait_and_process_once_with_timeout(on_event, iox2::bb::Duration::from_micros(1));
     }
@@ -743,6 +745,10 @@ bool TraceExecutorShmem::synchronize(CudaTrace &cuda_trace)
       // iceoryx2: direct waitset/poll in main thread
       while(last_synchronized != last_sent) {
         receive_pending_responses(true);
+        if (last_synchronized != last_sent && !server_connected()) {
+          fatal(fmt::format("the gpuless server disappeared; requests {}..{} are unanswered",
+                            last_synchronized + 1, last_sent));
+        }
         SPDLOG_INFO("Synchronized, now position synchronized {}, last sent {}", last_synchronized, last_sent);
         //spdlog::info("Synchronized, now position synchronized {}, last sent {}", last_synchronized, last_sent);
 
@@ -937,20 +943,29 @@ bool TraceExecutorShmem::getDeviceAttributes() {
         return iox2::CallbackProgression::Continue;
       };
 
-      // Only a received attribute response counts as success.
-      auto deadline = std::chrono::steady_clock::now() + SERVER_WAIT_LIMIT;
+      // Only a received attribute response counts as success. No fixed
+      // deadline here: the server holds requests until the orchestrator
+      // enables execution (first invocation), which can take arbitrarily long.
+      // Fail only when the server is gone; check that once per second.
+      auto start = std::chrono::steady_clock::now();
+      auto next_warning = SERVER_WAIT_LIMIT;
       while (last_synchronized < last_sent) {
-        auto left = std::chrono::duration_cast<std::chrono::milliseconds>(
-            deadline - std::chrono::steady_clock::now());
-        if (left.count() <= 0) {
-          spdlog::error("gpuless: no response to the device attribute request within {} s",
-                        SERVER_WAIT_LIMIT.count());
-          return false;
-        }
         auto loop_result = waitset.wait_and_process_once_with_timeout(
-            on_event, iox2::bb::Duration::from_millis(left.count()));
+            on_event, iox2::bb::Duration::from_secs(1));
         if (!loop_result.has_value()) {
           spdlog::error("iceoryx2: WaitSet loop error: {}", static_cast<uint64_t>(loop_result.error()));
+        }
+        if (last_synchronized >= last_sent) {
+          break;
+        }
+        if (!server_connected()) {
+          spdlog::error("gpuless: the gpuless server disappeared before answering the device attribute request");
+          return false;
+        }
+        if (std::chrono::steady_clock::now() - start >= next_warning) {
+          spdlog::warn("gpuless: still waiting for the device attribute response after {} s",
+                       next_warning.count());
+          next_warning += SERVER_WAIT_LIMIT;
         }
       }
 

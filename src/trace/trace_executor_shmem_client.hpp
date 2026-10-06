@@ -72,6 +72,7 @@ class TraceExecutorShmem : public TraceExecutor {
 
     // Waits (bounded, see the .cpp) until the gpuless server's request endpoints exist.
     bool wait_for_server();
+    bool server_connected();
 #ifdef MIGNIFICIENT_WITH_ICEORYX2
     // Sends one request and notifies the server; aborts if nobody receives it.
     void send_request_iox2(flatbuffers::FlatBufferBuilder &builder);
