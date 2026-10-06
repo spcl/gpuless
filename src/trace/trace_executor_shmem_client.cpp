@@ -793,7 +793,10 @@ bool TraceExecutorShmem::getDeviceAttributes() {
           for (const auto &a : *fb_trace_attribute_response->device_attributes()) {
               int32_t value = a->value();
               auto dev_attr = static_cast<CUdevice_attribute>(a->device_attribute());
-              this->device_attributes[dev_attr] = value;
+              // The server may be built with a newer CUDA (more attributes) than this client.
+              if (static_cast<size_t>(dev_attr) < this->device_attributes.size()) {
+                  this->device_attributes[dev_attr] = value;
+              }
           }
 
           //client->releaseResponse(responsePayload);
@@ -869,7 +872,10 @@ bool TraceExecutorShmem::getDeviceAttributes() {
             for (const auto &a : *fb_trace_attribute_response->device_attributes()) {
                 int32_t value = a->value();
                 auto dev_attr = static_cast<CUdevice_attribute>(a->device_attribute());
-                this->device_attributes[dev_attr] = value;
+                // The server may be built with a newer CUDA (more attributes) than this client.
+                if (static_cast<size_t>(dev_attr) < this->device_attributes.size()) {
+                    this->device_attributes[dev_attr] = value;
+                }
             }
 
             last_synchronized++;
