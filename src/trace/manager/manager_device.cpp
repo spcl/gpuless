@@ -352,6 +352,10 @@ void handle_request(int socket_fd) {
 }
 
 void ShmemServer::setup(const std::string app_name) {
+  // iceoryx1 only: the iceoryx2 backend needs no RouDi.
+  if (_ipc_backend != mignificient::ipc::IPCBackend::ICEORYX_V1) {
+    return;
+  }
   iox::runtime::PoshRuntime::initRuntime(
       iox::RuntimeName_t{iox::TruncateToCapacity_t{}, app_name.c_str()});
 }
