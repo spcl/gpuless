@@ -214,7 +214,11 @@ TraceExecutorShmem::TraceExecutorShmem():
       iox2_response_subscriber = std::move(sub_result.value());
     }
 
-    if (_polling_mode == mignificient::ipc::PollingMode::WAIT) {
+    // Events are needed in both modes: every request path notifies and waits on
+    // them, and the iceoryx2 server always waits for events.
+    //
+    // TODO: for the future - do we need proper poll instead of wait?
+    {
 
       {
         auto exec_event_service = node.service_builder(
