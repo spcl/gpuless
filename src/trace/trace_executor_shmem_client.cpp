@@ -1,6 +1,7 @@
 #include "trace_executor_shmem_client.hpp"
 #include "../schemas/allocation_protocol_generated.h"
 #include "cuda_trace_converter.hpp"
+#include "../iox2_config.hpp"
 
 #include <iox2/waitset_enums.hpp>
 #include <spdlog/spdlog.h>
@@ -142,6 +143,7 @@ TraceExecutorShmem::TraceExecutorShmem():
       // libgpuless is preloaded into someone else's process: never install
       // SIGINT/SIGTERM handlers (they would replace e.g. Python's KeyboardInterrupt).
       auto node_result_res = iox2::NodeBuilder()
+        .config(gpuless_iox2_config())
         .signal_handling_mode(iox2::SignalHandlingMode::Disabled)
         .create<iox2::ServiceType::Ipc>();
       if (!node_result_res.has_value()) {

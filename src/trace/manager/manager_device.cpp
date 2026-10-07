@@ -21,6 +21,7 @@
 
 #ifdef MIGNIFICIENT_WITH_ICEORYX2
 #include <iox2/iceoryx2.hpp>
+#include "../../iox2_config.hpp"
 #endif
 
 #include "../../schemas/trace_execution_protocol_generated.h"
@@ -919,6 +920,7 @@ void ShmemServer::loop_wait_v2(const char *user_name) {
 
   auto node_result = iox2::NodeBuilder()
     .name(iox2::NodeName::create(user_name).value())
+    .config(gpuless_iox2_config())
     .create<iox2::ServiceType::Ipc>();
 
   if (!node_result.has_value()) {
