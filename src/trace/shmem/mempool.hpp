@@ -56,27 +56,22 @@ struct MemChunk {
         //std::cerr << fd << " " << " " << size << " " << ret << " " << errno << std::endl;
 
         ptr = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-        if(ptr == (void*)-1) {
+        if(ptr == MAP_FAILED) {
           spdlog::error("Fatal error in mmap! {}", strerror(errno));
           abort();
         }
+        ::close(fd);
         //std::cerr << "allocate " << name << " " << size << " " << errno << " " << reinterpret_cast<std::uintptr_t>(ptr) << std::endl;
 
         this->size = size;
     }
 
-    void open()
-    {
-        //std::cerr << "open " << name << std::endl;
-        int fd = chunk_open(name, O_RDWR);
-        ptr = mmap(NULL, CHUNK_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-    }
-
+    // The client creates the chunks, so it removes them; the server unlinks the ones it opened too
+    // (MemPoolRead::close), whoever exits first.
     void close()
     {
-        //std::cerr << "Close " << name << std::endl;
-        munmap(ptr, CHUNK_SIZE);
-        //shm_unlink(name.c_str());
+        munmap(ptr, size);
+        unlink(chunk_path(name).c_str());
     }
 };
 
@@ -99,10 +94,15 @@ public:
         }
 
         struct stat st;
-        fstat(fd, &st);
-
-        //auto ptr = mmap(NULL, MemChunk::CHUNK_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-        auto ptr = mmap(NULL, st.st_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+        void* ptr = MAP_FAILED;
+        if(fstat(fd, &st) == 0) {
+          ptr = mmap(NULL, st.st_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+        }
+        ::close(fd);
+        if(ptr == MAP_FAILED) {
+          spdlog::error("Fatal error of {} in mmap! {}", name, strerror(errno));
+          abort();
+        }
 
         //std::cerr << "open " << name << " " << fd << " " << ptr << std::endl;
         used_chunks[name] = ptr;
