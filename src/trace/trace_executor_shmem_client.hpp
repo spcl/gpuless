@@ -39,6 +39,7 @@ class TraceExecutorShmem : public TraceExecutor {
 #ifdef MIGNIFICIENT_WITH_ICEORYX2
     // iceoryx2 node and communication objects
     //
+    std::optional<iox2::Config> iox2_config;  // of iox2_node; server_connected() lists its nodes
     std::optional<iox2::Node<iox2::ServiceType::Ipc>> iox2_node;
 
     std::optional<iox2::PortFactoryEvent<iox2::ServiceType::Ipc>> iox2_event_notifier;

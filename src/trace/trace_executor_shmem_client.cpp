@@ -142,8 +142,9 @@ TraceExecutorShmem::TraceExecutorShmem():
     {
       // libgpuless is preloaded into someone else's process: never install
       // SIGINT/SIGTERM handlers (they would replace e.g. Python's KeyboardInterrupt).
+      iox2_config.emplace(gpuless_iox2_config());
       auto node_result_res = iox2::NodeBuilder()
-        .config(gpuless_iox2_config())
+        .config(*iox2_config)
         .signal_handling_mode(iox2::SignalHandlingMode::Disabled)
         .create<iox2::ServiceType::Ipc>();
       if (!node_result_res.has_value()) {
@@ -290,6 +291,12 @@ constexpr auto SERVER_WAIT_LIMIT = std::chrono::seconds(30);
 bool TraceExecutorShmem::server_connected() {
 #ifdef MIGNIFICIENT_WITH_ICEORYX2
   if (_ipc_backend == mignificient::ipc::IPCBackend::ICEORYX_V2) {
+    // A SIGKILLed server's ports stay registered until someone cleans up its dead node; iceoryx2 knows
+    // it is dead (its monitor lock is gone), so remove its stale resources before counting.
+    iox2::Node<iox2::ServiceType::Ipc>::list(iox2_config->view(), [](auto state) {
+      state.dead([](auto& view) { (void)view.remove_stale_resources(); });
+      return iox2::CallbackProgression::Continue;
+    });
     return iox2_request_service->dynamic_config().number_of_subscribers() > 0 &&
            iox2_event_notifier->dynamic_config().number_of_listeners() > 0;
   }
