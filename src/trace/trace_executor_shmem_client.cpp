@@ -139,7 +139,11 @@ TraceExecutorShmem::TraceExecutorShmem():
     }
 
     {
-      auto node_result_res = iox2::NodeBuilder().create<iox2::ServiceType::Ipc>();
+      // libgpuless is preloaded into someone else's process: never install
+      // SIGINT/SIGTERM handlers (they would replace e.g. Python's KeyboardInterrupt).
+      auto node_result_res = iox2::NodeBuilder()
+        .signal_handling_mode(iox2::SignalHandlingMode::Disabled)
+        .create<iox2::ServiceType::Ipc>();
       if (!node_result_res.has_value()) {
         spdlog::error("Cannot allocate iceoryx2 node! Error: {}", node_result_res.error());
       }
@@ -244,7 +248,9 @@ TraceExecutorShmem::TraceExecutorShmem():
       iox2_response_listener = iox2_event_listener->listener_builder().create().value();
       iox2_request_notifier = iox2_event_notifier->notifier_builder().create().value();
 
-      auto waitset_result = iox2::WaitSetBuilder().create<iox2::ServiceType::Ipc>();
+      auto waitset_result = iox2::WaitSetBuilder()
+        .signal_handling_mode(iox2::SignalHandlingMode::Disabled)
+        .create<iox2::ServiceType::Ipc>();
       if (waitset_result.has_value()) {
         iox2_waitset = std::move(waitset_result.value());
 
@@ -273,19 +279,6 @@ constexpr auto SERVER_WAIT_LIMIT = std::chrono::seconds(30);
   spdlog::default_logger()->flush();
   std::abort();
 }
-#ifdef MIGNIFICIENT_WITH_ICEORYX2
-// The wait set swallows SIGTERM/SIGINT and reports them; without this check the
-// response loops would retry forever and the process could not be stopped.
-// _Exit: atexit handlers would try to talk to the server again.
-void exit_on_signal(const iox2::bb::Expected<iox2::WaitSetRunResult, iox2::WaitSetRunError> &res) {
-  if (res.has_value() && (res.value() == iox2::WaitSetRunResult::TerminationRequest ||
-                          res.value() == iox2::WaitSetRunResult::Interrupt)) {
-    spdlog::error("gpuless: termination requested while waiting for the gpuless server; exiting");
-    spdlog::default_logger()->flush();
-    std::_Exit(EXIT_FAILURE);
-  }
-}
-#endif
 } // namespace
 
 // The server may start after the client (e.g. a Python function importing torch
@@ -532,7 +525,6 @@ void TraceExecutorShmem::receive_pending_responses(bool blocking) {
       loop_result = iox2_waitset->wait_and_process_once_with_timeout(on_event, iox2::bb::Duration::from_micros(1));
     }
 
-    exit_on_signal(loop_result);
     if(!loop_result.has_value()) {
       spdlog::error("iceoryx2: Waitset processing error: {}", static_cast<uint64_t>(loop_result.error()));
     }
@@ -970,7 +962,6 @@ bool TraceExecutorShmem::getDeviceAttributes() {
       while (last_synchronized < last_sent) {
         auto loop_result = waitset.wait_and_process_once_with_timeout(
             on_event, iox2::bb::Duration::from_secs(1));
-        exit_on_signal(loop_result);
         if (!loop_result.has_value()) {
           spdlog::error("iceoryx2: WaitSet loop error: {}", static_cast<uint64_t>(loop_result.error()));
         }
