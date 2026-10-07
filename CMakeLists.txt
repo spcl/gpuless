@@ -211,6 +211,9 @@ add_library(gpuless SHARED
     src/utils.cpp
     src/trace/cubin_analysis.cpp)
 target_include_directories(gpuless SYSTEM PRIVATE $<TARGET_PROPERTY:spdlog::spdlog,INTERFACE_INCLUDE_DIRECTORIES>)
+# Export only the intercepted APIs (see the map file).
+target_link_options(gpuless PRIVATE "LINKER:--version-script=${CMAKE_CURRENT_SOURCE_DIR}/src/trace/libgpuless.map")
+set_property(TARGET gpuless APPEND PROPERTY LINK_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/trace/libgpuless.map)
 add_dependencies(gpuless flatbuffer)
 add_dependencies(gpuless spdlog)
 target_link_libraries(gpuless

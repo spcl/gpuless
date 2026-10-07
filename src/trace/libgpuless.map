@@ -1,0 +1,16 @@
+/* libgpuless is LD_PRELOADed into the application, so every symbol it exports takes precedence over the
+ * application's own libraries. Export only the APIs it intercepts; everything else (the C++ standard library,
+ * spdlog, flatbuffers, the demangler, the iceoryx2/Rust runtime) stays local. Exported std:: template code
+ * built with another compiler broke PyTorch: torch.jit.load ran libgpuless's std::regex scanner (GCC 11)
+ * from libtorch's regex compiler (GCC 9) and aborted with "free(): invalid pointer". */
+{
+  global:
+    cuda*;
+    cu[A-Z]*;
+    __cuda*;
+    cublas*;
+    cudnn*;
+    dlsym;
+  local:
+    *;
+};
