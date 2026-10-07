@@ -1350,10 +1350,17 @@ void manage_device_shmem(const std::string &device, const std::string &app_name,
     MemoryStore::get_instance().set_max_memory(max_memory_bytes);
   }
 
-  // initialize cuda device pre-emptively
+  // initialize cuda device pre-emptively; NVML reports this process's memory before and after, so the
+  // difference is the CUDA context
+  auto& memory_store = MemoryStore::get_instance();
+  memory_store.set_nvml_device(device);
+  unsigned long long before_context = memory_store.nvml_used_memory();
   getCudaVirtualDevice().initRealDevice();
-
-  MemoryStore::get_instance().nvml_used_memory();
+  // Baseline for the consistency checks (memory without mallocs), and OOM if the context alone exceeds the limit.
+  memory_store.check_memory("CUDA context init");
+  spdlog::info("CUDA context: {:.1f} MB (NVML, this process: {} bytes before, {} after)",
+               (memory_store.nvml_gpu_memory() - before_context) / (1024.0 * 1024.0), before_context,
+               memory_store.nvml_gpu_memory());
 
 #if defined(MIGNIFICIENT_WITH_PROFILING)
   spdlog::info("Memory consumption after initializing CUDA context.");

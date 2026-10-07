@@ -76,6 +76,8 @@ struct MemoryStore
   void shutdown_background_thread();
   void check_memory_final();
   void set_max_memory(unsigned long long max_bytes);
+  // The device NVML reports on: GPU or MIG UUID (as in CUDA_VISIBLE_DEVICES) or an index.
+  void set_nvml_device(const std::string& device) { _nvml_device_id = device; }
   bool is_oom() const { return _oom_detected.load(std::memory_order_acquire); }
 
   // Legacy API - kept for backward compatibility
@@ -140,6 +142,7 @@ private:
   // NVML state
   bool _nvml_initialized = false;
   nvmlDevice_t _nvml_device{};
+  std::string _nvml_device_id = "0";
   unsigned long long _nvml_gpu_memory = 0;
   unsigned long long _nvml_gpu_memory_wo_mallocs = 0;
   double _nvml_time_us = 0;

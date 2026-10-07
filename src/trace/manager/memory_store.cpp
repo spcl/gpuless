@@ -325,10 +325,23 @@ bool MemoryStore::_check_nvml_initialized()
       spdlog::error("NVML init failed: {}", nvmlErrorString(ret));
       return false;
     }
-    ret = nvmlDeviceGetHandleByIndex_v2(0, &_nvml_device);
+    if (_nvml_device_id.find_first_not_of("0123456789") == std::string::npos) {
+      ret = nvmlDeviceGetHandleByIndex_v2(std::stoul(_nvml_device_id), &_nvml_device);
+    } else {
+      ret = nvmlDeviceGetHandleByUUID(_nvml_device_id.c_str(), &_nvml_device);
+    }
     if (ret != NVML_SUCCESS) {
-      spdlog::error("NVML get device handle failed: {}", nvmlErrorString(ret));
+      spdlog::error("NVML get device handle for {} failed: {}", _nvml_device_id, nvmlErrorString(ret));
       return false;
+    }
+    // A MIG device doesn't list processes; its parent GPU does, with per-process memory.
+    unsigned int is_mig = 0;
+    if (nvmlDeviceIsMigDeviceHandle(_nvml_device, &is_mig) == NVML_SUCCESS && is_mig) {
+      ret = nvmlDeviceGetDeviceHandleFromMigDeviceHandle(_nvml_device, &_nvml_device);
+      if (ret != NVML_SUCCESS) {
+        spdlog::error("NVML parent of MIG device {} failed: {}", _nvml_device_id, nvmlErrorString(ret));
+        return false;
+      }
     }
     _nvml_initialized = true;
   }
