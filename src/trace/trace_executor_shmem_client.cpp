@@ -332,6 +332,23 @@ bool TraceExecutorShmem::wait_for_server() {
 
 #ifdef MIGNIFICIENT_WITH_ICEORYX2
 void TraceExecutorShmem::send_request_iox2(flatbuffers::FlatBufferBuilder &builder) {
+  // Back-pressure. The server answers every request, and we read answers only here and in synchronize().
+  // Requests sent without a synchronize in between (asynchronous calls) accumulate answers; once the response
+  // queue is full the server blocks on it, then our requests fill its queue and we block too. Keep the number
+  // of unanswered requests below the queue capacity: drain what has arrived when we get close, wait for
+  // answers when at the limit.
+  const int64_t capacity = static_cast<int64_t>(_buffer_config.queue_capacity);
+  if (last_sent - last_synchronized >= std::max<int64_t>(1, capacity * 3 / 4)) {
+    receive_pending_responses(false);
+    while (last_sent - last_synchronized >= capacity) {
+      receive_pending_responses(true);
+      if (last_sent - last_synchronized >= capacity && !server_connected()) {
+        fatal(fmt::format("the gpuless server disappeared; requests {}..{} are unanswered",
+                          last_synchronized + 1, last_sent));
+      }
+    }
+  }
+
   auto sample = iox2_request_publisher->loan_slice_uninit(builder.GetSize());
   if (!sample.has_value()) {
     spdlog::error("iceoryx2: Could not allocate Request! Error: {}", static_cast<uint64_t>(sample.error()));
@@ -487,57 +504,36 @@ void TraceExecutorShmem::receive_pending_responses(bool blocking) {
 
     auto& subscriber = iox2_response_subscriber.value();
 
-    auto on_event = [&](iox2::WaitSetAttachmentId<iox2::ServiceType::Ipc> attachment_id) -> iox2::CallbackProgression {
-      if (attachment_id.has_event_from(iox2_waitset_guard.value())) {
-        SPDLOG_DEBUG("iceoryx2: Response data available");
-
-        // Receive all pending samples
-        auto event = iox2_response_listener->try_wait_one();
-        while (event.has_value() && event.value().has_value()) {
-
-          auto sample = subscriber.receive();
-          if (!sample.has_value() || !sample.value().has_value()) {
-            break;
-          }
-
-          const auto& received_sample = sample.value();
-          auto* responsePayload = received_sample.value().payload().data();
-
-          SPDLOG_DEBUG("receive_pending_responses[iceoryx2]: Received response");
-
-          auto fb_protocol_message_response = GetFBProtocolMessage(responsePayload);
-          auto fb_trace_exec_response = fb_protocol_message_response->message_as_FBTraceExecResponse();
-
-          _last_api_call = CudaTraceConverter::execResponseToTopApiCall(fb_trace_exec_response);
-
-          last_synchronized++;
-
-          auto e1 = std::chrono::high_resolution_clock::now();
-          auto d1 = std::chrono::duration_cast<std::chrono::microseconds>(e1 - std::chrono::high_resolution_clock::now()).count() / 1000000.0;
-          this->serialize_total_time += d1;
-
-          SPDLOG_DEBUG("receive_pending_responses[iceoryx2]: Processed response {}", last_synchronized);
-
-          event = iox2_response_listener->try_wait_one();
-        }
-      } else {
-        spdlog::error("Unknown event source in wait set!");
+    // Reads every response available. Notifications only wake us up: they can be lost when the event socket is
+    // full, so the number of events says nothing about the number of responses.
+    auto drain = [&]() {
+      auto event = iox2_response_listener->try_wait_one();
+      while (event.has_value() && event.value().has_value()) {
+        event = iox2_response_listener->try_wait_one();
       }
-      return iox2::CallbackProgression::Continue;
+
+      auto sample = subscriber.receive();
+      while (sample.has_value() && sample.value().has_value()) {
+        auto* responsePayload = sample.value().value().payload().data();
+        auto fb_protocol_message_response = GetFBProtocolMessage(responsePayload);
+        auto fb_trace_exec_response = fb_protocol_message_response->message_as_FBTraceExecResponse();
+        _last_api_call = CudaTraceConverter::execResponseToTopApiCall(fb_trace_exec_response);
+        last_synchronized++;
+        SPDLOG_DEBUG("receive_pending_responses[iceoryx2]: Processed response {}", last_synchronized);
+        sample = subscriber.receive();
+      }
     };
 
-    iox2::bb::Expected<iox2::WaitSetRunResult, iox2::WaitSetRunError> loop_result;
     if(blocking) {
       // Wake up once per second so callers can check that the server is still there.
-      loop_result = iox2_waitset->wait_and_process_once_with_timeout(on_event, iox2::bb::Duration::from_secs(1));
-    } else {
-      loop_result = iox2_waitset->wait_and_process_once_with_timeout(on_event, iox2::bb::Duration::from_micros(1));
+      auto loop_result = iox2_waitset->wait_and_process_once_with_timeout(
+        [](iox2::WaitSetAttachmentId<iox2::ServiceType::Ipc>) { return iox2::CallbackProgression::Continue; },
+        iox2::bb::Duration::from_secs(1));
+      if(!loop_result.has_value()) {
+        spdlog::error("iceoryx2: Waitset processing error: {}", static_cast<uint64_t>(loop_result.error()));
+      }
     }
-
-    if(!loop_result.has_value()) {
-      spdlog::error("iceoryx2: Waitset processing error: {}", static_cast<uint64_t>(loop_result.error()));
-    }
-
+    drain();
   }
 #endif
 }
