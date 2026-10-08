@@ -11,6 +11,8 @@
     cublas*;
     cudnn*;
     dlsym;
+    /* MIGnificient API for functions: mignificient_malloc (zero-copy transfer buffers), memcpy stats. */
+    mignificient_*;
   local:
     *;
 };
