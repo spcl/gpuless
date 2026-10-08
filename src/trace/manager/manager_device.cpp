@@ -248,7 +248,8 @@ finish_trace_execution(int last_idx) {
                 last_idx, cuda_trace.sizeCallStack(),
                 std::distance(begin, end));
   std::advance(begin, last_idx);
-  size_t idx = 0;
+  // Absolute position in the call stack: saved when blocked again, and resumed from with std::advance.
+  size_t idx = last_idx;
   bool has_likely_call = false;
   // for(size_t idx = last_idx; idx < callstack.size(); ++idx)
   for (; begin != end; ++begin) {
@@ -299,6 +300,7 @@ finish_trace_execution(int last_idx) {
       has_likely_call = true;
     }
 #endif
+    ++idx;
   }
 
   if (has_likely_call) {
