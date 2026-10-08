@@ -136,7 +136,14 @@ std::shared_ptr<TraceExecutor> getTraceExecutor(bool clean) {
             trace_executor = exec;
             bool r = trace_executor->init(manager_ip, manager_port,
                                           manager::instance_profile::NO_MIG);
-
+            // Called from inside a CUDA registration/runtime call with no error
+            // path; abort rather than exit() so atexit handlers do not talk to
+            // the missing server.
+            if (!r) {
+                spdlog::error("gpuless: failed to initialize the shared-memory trace executor (no gpuless server or no response); aborting");
+                spdlog::default_logger()->flush();
+                std::abort();
+            }
 
         } else {
             trace_executor = std::make_shared<TraceExecutorLocal>();

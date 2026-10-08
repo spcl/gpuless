@@ -46,6 +46,7 @@ class TraceExecutorShmem : public TraceExecutor {
     std::optional<iox2::Notifier<iox2::ServiceType::Ipc>> iox2_request_notifier;
     std::optional<iox2::Listener<iox2::ServiceType::Ipc>> iox2_response_listener;
 
+    std::optional<iox2::PortFactoryPublishSubscribe<iox2::ServiceType::Ipc, iox2::bb::Slice<uint8_t>, int>> iox2_request_service;
     std::optional<iox2::Publisher<iox2::ServiceType::Ipc, iox2::bb::Slice<uint8_t>, int>> iox2_request_publisher;
     std::optional<iox2::Subscriber<iox2::ServiceType::Ipc, iox2::bb::Slice<uint8_t>, int>> iox2_response_subscriber;
 
@@ -68,6 +69,13 @@ class TraceExecutorShmem : public TraceExecutor {
   private:
     bool negotiateSession(manager::instance_profile profile);
     bool getDeviceAttributes();
+
+    // Waits (bounded, see the .cpp) until the gpuless server's request endpoints exist.
+    bool wait_for_server();
+#ifdef MIGNIFICIENT_WITH_ICEORYX2
+    // Sends one request and notifies the server; aborts if nobody receives it.
+    void send_request_iox2(flatbuffers::FlatBufferBuilder &builder);
+#endif
 
     // iceoryx2 only: helper method to receive pending responses directly in main thread
     // If blocking=true, waits until at least one response is received
