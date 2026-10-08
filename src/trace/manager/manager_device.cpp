@@ -1,3 +1,4 @@
+#include <deque>
 #include <chrono>
 #include <iostream>
 #include <thread>
@@ -1068,6 +1069,10 @@ void ShmemServer::loop_wait_v2(const char *user_name) {
   }
 
   std::queue<const void*> pendingPayload;
+  // iceoryx2 samples are released when they go out of scope (unlike iceoryx1 chunks, which stay valid until
+  // _release_request). Requests kept for later -- queued while the device may not execute, or a call that blocked
+  // half-way and resumes in _process_remainder -- point into these copies instead of into released samples.
+  std::deque<std::vector<uint8_t>> keptRequests;
   bool has_blocked_call = false;
   auto& instance = ExecutionStatus::instance();
 
@@ -1103,10 +1108,17 @@ void ShmemServer::loop_wait_v2(const char *user_name) {
             auto new_header = res.value()->user_header();
             SPDLOG_DEBUG("Received_request {} ", new_header);
 
+            auto keep = [&]() {
+              keptRequests.emplace_back(payload.data(), payload.data() + payload.number_of_elements());
+              return static_cast<const void*>(keptRequests.back().data());
+            };
             if (instance.can_exec() && !has_blocked_call) {
               has_blocked_call = !_process_client(payload.data());
+              if (has_blocked_call && instance.has_unfinished_trace() && instance.load_payload() == payload.data()) {
+                instance.save_payload(keep());  // resumes after this sample is released
+              }
             } else {
-              pendingPayload.push(payload.data());
+              pendingPayload.push(keep());
             }
 
             res = iox2_client_subscriber->receive();
@@ -1212,6 +1224,9 @@ void ShmemServer::loop_wait_v2(const char *user_name) {
             pendingPayload.pop();
             has_blocked_call = !_process_client(payload);
           }
+        }
+        if (pendingPayload.empty() && !instance.has_unfinished_trace()) {
+          keptRequests.clear();
         }
 
         event_res = iox2_orchestrator_listener->try_wait_one();
