@@ -21,6 +21,7 @@
 
 #ifdef MIGNIFICIENT_WITH_ICEORYX2
 #include <iox2/iceoryx2.hpp>
+#include "../../iox2_config.hpp"
 #endif
 
 #include "../../schemas/trace_execution_protocol_generated.h"
@@ -352,6 +353,10 @@ void handle_request(int socket_fd) {
 }
 
 void ShmemServer::setup(const std::string app_name) {
+  // iceoryx1 only: the iceoryx2 backend needs no RouDi.
+  if (_ipc_backend != mignificient::ipc::IPCBackend::ICEORYX_V1) {
+    return;
+  }
   iox::runtime::PoshRuntime::initRuntime(
       iox::RuntimeName_t{iox::TruncateToCapacity_t{}, app_name.c_str()});
 }
@@ -915,6 +920,7 @@ void ShmemServer::loop_wait_v2(const char *user_name) {
 
   auto node_result = iox2::NodeBuilder()
     .name(iox2::NodeName::create(user_name).value())
+    .config(gpuless_iox2_config())
     .create<iox2::ServiceType::Ipc>();
 
   if (!node_result.has_value()) {
@@ -1276,6 +1282,8 @@ void manage_device_shmem(const std::string &device, const std::string &app_name,
                          bool use_vmm) {
 
   setenv("CUDA_VISIBLE_DEVICES", device.c_str(), 1);
+  // Before anything touches CUDA: the CUDA context size is the difference to the reading after its init.
+  unsigned long long before_context = MemoryStore::nvml_process_memory(device);
 
   ShmemServer shm_server;
 
@@ -1345,9 +1353,18 @@ void manage_device_shmem(const std::string &device, const std::string &app_name,
   }
 
   // initialize cuda device pre-emptively
+  auto& memory_store = MemoryStore::get_instance();
+  memory_store.set_nvml_device(device);
+  memory_store.nvml_used_memory();
   getCudaVirtualDevice().initRealDevice();
-
-  MemoryStore::get_instance().nvml_used_memory();
+  // Baseline for the consistency checks (memory without mallocs), and OOM if the context alone exceeds the limit;
+  // the server reports that OOM at the first request.
+  if (memory_store.check_memory("CUDA context init") == MemoryCheckResult::OOM) {
+    shm_server._oom_detected.store(true, std::memory_order_release);
+  }
+  spdlog::info("CUDA context: {:.1f} MB (NVML, this process: {} bytes before, {} after)",
+               (memory_store.nvml_gpu_memory() - before_context) / (1024.0 * 1024.0), before_context,
+               memory_store.nvml_gpu_memory());
 
 #if defined(MIGNIFICIENT_WITH_PROFILING)
   spdlog::info("Memory consumption after initializing CUDA context.");

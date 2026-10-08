@@ -1,6 +1,7 @@
 #include "trace_executor_shmem_client.hpp"
 #include "../schemas/allocation_protocol_generated.h"
 #include "cuda_trace_converter.hpp"
+#include "../iox2_config.hpp"
 
 #include <iox2/waitset_enums.hpp>
 #include <spdlog/spdlog.h>
@@ -11,6 +12,7 @@
 #ifdef MIGNIFICIENT_WITH_ICEORYX2
 #include "iox2/iceoryx2.hpp"
 #endif
+#include <algorithm>
 #include <cstdlib>
 #include <stdexcept>
 #include <thread>
@@ -138,7 +140,13 @@ TraceExecutorShmem::TraceExecutorShmem():
     }
 
     {
-      auto node_result_res = iox2::NodeBuilder().create<iox2::ServiceType::Ipc>();
+      // libgpuless is preloaded into someone else's process: never install
+      // SIGINT/SIGTERM handlers (they would replace e.g. Python's KeyboardInterrupt).
+      iox2_config.emplace(gpuless_iox2_config());
+      auto node_result_res = iox2::NodeBuilder()
+        .config(*iox2_config)
+        .signal_handling_mode(iox2::SignalHandlingMode::Disabled)
+        .create<iox2::ServiceType::Ipc>();
       if (!node_result_res.has_value()) {
         spdlog::error("Cannot allocate iceoryx2 node! Error: {}", node_result_res.error());
       }
@@ -171,8 +179,9 @@ TraceExecutorShmem::TraceExecutorShmem():
         std::exit(EXIT_FAILURE);
       }
 
-      auto pub_result = service_result.value()
-        .publisher_builder()
+      iox2_request_service = std::move(service_result.value());
+      auto pub_result = iox2_request_service
+        ->publisher_builder()
         .allocation_strategy(iox2::AllocationStrategy::BestFit)
         .initial_max_slice_len(4096)
         .create();
@@ -214,7 +223,12 @@ TraceExecutorShmem::TraceExecutorShmem():
       iox2_response_subscriber = std::move(sub_result.value());
     }
 
-    if (_polling_mode == mignificient::ipc::PollingMode::WAIT) {
+    // Events are needed in both modes: every request path notifies and waits on
+    // them, and the iceoryx2 server always waits for events.
+    //
+    // TODO: for the future - do we need proper poll instead of wait?
+    // Note: on iceoryx2, POLL currently behaves like WAIT; a busy-poll receive path is not implemented.
+    {
 
       {
         auto exec_event_service = node.service_builder(
@@ -237,7 +251,9 @@ TraceExecutorShmem::TraceExecutorShmem():
       iox2_response_listener = iox2_event_listener->listener_builder().create().value();
       iox2_request_notifier = iox2_event_notifier->notifier_builder().create().value();
 
-      auto waitset_result = iox2::WaitSetBuilder().create<iox2::ServiceType::Ipc>();
+      auto waitset_result = iox2::WaitSetBuilder()
+        .signal_handling_mode(iox2::SignalHandlingMode::Disabled)
+        .create<iox2::ServiceType::Ipc>();
       if (waitset_result.has_value()) {
         iox2_waitset = std::move(waitset_result.value());
 
@@ -257,10 +273,111 @@ TraceExecutorShmem::~TraceExecutorShmem()
   spdlog::debug("Total serialize_total_time {}", serialize_total_time);
 }
 
+namespace {
+// How long the client waits for the gpuless server's endpoints to appear.
+constexpr auto SERVER_WAIT_LIMIT = std::chrono::seconds(30);
+
+[[noreturn]] void fatal(const std::string &msg) {
+  spdlog::error("gpuless: {}", msg);
+  spdlog::default_logger()->flush();
+  std::abort();
+}
+} // namespace
+
+// The server may start after the client (e.g. a Python function importing torch
+// at module level). A request published before the server's subscriber and
+// listener exist is dropped, and the client would then wait forever. So wait
+// until they exist, polling with backoff (1 ms doubling to 100 ms).
+bool TraceExecutorShmem::server_connected() {
+#ifdef MIGNIFICIENT_WITH_ICEORYX2
+  if (_ipc_backend == mignificient::ipc::IPCBackend::ICEORYX_V2) {
+    // A SIGKILLed server's ports stay registered until someone cleans up its dead node; iceoryx2 knows
+    // it is dead (its monitor lock is gone), so remove its stale resources before counting.
+    iox2::Node<iox2::ServiceType::Ipc>::list(iox2_config->view(), [](auto state) {
+      state.dead([](auto& view) { (void)view.remove_stale_resources(); });
+      return iox2::CallbackProgression::Continue;
+    });
+    return iox2_request_service->dynamic_config().number_of_subscribers() > 0 &&
+           iox2_event_notifier->dynamic_config().number_of_listeners() > 0;
+  }
+#endif
+  return request_publisher->hasSubscribers();
+}
+
+bool TraceExecutorShmem::wait_for_server() {
+  auto start = std::chrono::steady_clock::now();
+  auto backoff = std::chrono::milliseconds(1);
+  while (!server_connected()) {
+    if (std::chrono::steady_clock::now() - start >= SERVER_WAIT_LIMIT) {
+      spdlog::error("gpuless: no gpuless server for {} after {} s; is manager_device running for this client?",
+                    std::getenv("CONTAINER_NAME") ? std::getenv("CONTAINER_NAME") : "null",
+                    SERVER_WAIT_LIMIT.count());
+      return false;
+    }
+    std::this_thread::sleep_for(backoff);
+    backoff = std::min(backoff * 2, std::chrono::milliseconds(100));
+  }
+#ifdef MIGNIFICIENT_WITH_ICEORYX2
+  if (_ipc_backend == mignificient::ipc::IPCBackend::ICEORYX_V2) {
+    iox2_request_publisher->update_connections();
+  }
+#endif
+  auto waited = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now() - start).count();
+  if (waited > 0) {
+    spdlog::info("gpuless: server ready after {} ms", waited);
+  }
+  return true;
+}
+
+#ifdef MIGNIFICIENT_WITH_ICEORYX2
+void TraceExecutorShmem::send_request_iox2(flatbuffers::FlatBufferBuilder &builder) {
+  auto sample = iox2_request_publisher->loan_slice_uninit(builder.GetSize());
+  if (!sample.has_value()) {
+    spdlog::error("iceoryx2: Could not allocate Request! Error: {}", static_cast<uint64_t>(sample.error()));
+    throw std::runtime_error{"could not allocate sample"};
+  }
+
+  auto payload = sample.value().payload_mut();
+  std::memcpy(payload.data(), builder.GetBufferPointer(), builder.GetSize());
+
+  SPDLOG_DEBUG("iceoryx2: Submit_request {}, size {}", last_sent, builder.GetSize());
+
+  auto initialized_sample = iox2::assume_init(std::move(sample.value()));
+  initialized_sample.user_header_mut() = ++last_sent;
+
+  // The server's subscriber existed before the first request (wait_for_server).
+  // No recipient now means it is gone and no response will ever come.
+  auto send_result = iox2::send(std::move(initialized_sample));
+  if (!send_result.has_value()) {
+    fatal(fmt::format("could not send request {}: error {}", last_sent, static_cast<uint64_t>(send_result.error())));
+  }
+  if (send_result.value() == 0) {
+    fatal(fmt::format("request {} reached no gpuless server", last_sent));
+  }
+
+  // A notification with no listener is lost; wait for the listener and notify again.
+  auto notify_result = iox2_request_notifier->notify();
+  if (notify_result.has_value() && notify_result.value() == 0) {
+    spdlog::warn("gpuless: notification for request {} reached no listener, waiting for the server", last_sent);
+    if (!wait_for_server()) {
+      fatal(fmt::format("no gpuless server listener for request {}", last_sent));
+    }
+    notify_result = iox2_request_notifier->notify();
+  }
+  if (!notify_result.has_value()) {
+    fatal(fmt::format("could not notify gpuless server of request {}: error {}", last_sent,
+                      static_cast<uint64_t>(notify_result.error())));
+  }
+}
+#endif
+
 bool TraceExecutorShmem::init(const char *ip, const short port,
                             manager::instance_profile profile) {
 
-    this->getDeviceAttributes();
+    if (!this->getDeviceAttributes()) {
+        return false;
+    }
 
     if (_ipc_backend == mignificient::ipc::IPCBackend::ICEORYX_V1) {
         // iceoryx1: spawn background thread that waits on waitset and enqueues results
@@ -411,7 +528,8 @@ void TraceExecutorShmem::receive_pending_responses(bool blocking) {
 
     iox2::bb::Expected<iox2::WaitSetRunResult, iox2::WaitSetRunError> loop_result;
     if(blocking) {
-      loop_result = iox2_waitset->wait_and_process_once(on_event);
+      // Wake up once per second so callers can check that the server is still there.
+      loop_result = iox2_waitset->wait_and_process_once_with_timeout(on_event, iox2::bb::Duration::from_secs(1));
     } else {
       loop_result = iox2_waitset->wait_and_process_once_with_timeout(on_event, iox2::bb::Duration::from_micros(1));
     }
@@ -472,29 +590,7 @@ bool TraceExecutorShmem::send_only(CudaTrace &cuda_trace)
     // iceoryx2 path
     else if (_ipc_backend == mignificient::ipc::IPCBackend::ICEORYX_V2) {
 
-      auto sample = iox2_request_publisher->loan_slice_uninit(builder.GetSize());
-      if (!sample.has_value()) {
-        spdlog::error("iceoryx2: Could not allocate Request! Error: {}", static_cast<uint64_t>(sample.error()));
-        throw std::runtime_error{"could not allocate sample"};
-      }
-
-      auto payload = sample.value().payload_mut();
-      std::memcpy(payload.data(), builder.GetBufferPointer(), builder.GetSize());
-
-      SPDLOG_DEBUG("iceoryx2: Submit_request {}, size {}", last_sent, builder.GetSize());
-
-      auto initialized_sample = iox2::assume_init(std::move(sample.value()));
-      initialized_sample.user_header_mut() = ++last_sent;
-
-      auto send_result = iox2::send(std::move(initialized_sample));
-      if (!send_result.has_value()) {
-        std::cout << "Could not send Request! Error: " << static_cast<uint64_t>(send_result.error()) << std::endl;
-      }
-
-      auto notify_result = iox2_request_notifier->notify();
-      if (!notify_result.has_value()) {
-        std::cout << "Could not send Request! Error: " << static_cast<uint64_t>(notify_result.error()) << std::endl;
-      }
+      send_request_iox2(builder);
     }
 #endif
 
@@ -641,30 +737,7 @@ bool TraceExecutorShmem::synchronize(CudaTrace &cuda_trace)
     // iceoryx2 path
     else if (_ipc_backend == mignificient::ipc::IPCBackend::ICEORYX_V2) {
 
-      auto sample = iox2_request_publisher->loan_slice_uninit(builder.GetSize());
-      if (!sample.has_value()) {
-        spdlog::error("iceoryx2: Could not allocate Request! Error: {}", static_cast<uint64_t>(sample.error()));
-        throw std::runtime_error{"could not allocate sample"};
-      }
-
-      // Write payload data
-      auto payload = sample.value().payload_mut();
-      std::memcpy(payload.data(), builder.GetBufferPointer(), builder.GetSize());
-
-      SPDLOG_DEBUG("iceoryx2: Submit_request {}, size {}", last_sent, builder.GetSize());
-
-      auto initialized_sample = iox2::assume_init(std::move(sample.value()));
-      initialized_sample.user_header_mut() = ++last_sent;
-
-      auto send_result = iox2::send(std::move(initialized_sample));
-      if (!send_result.has_value()) {
-        std::cout << "Could not send Request! Error: " << static_cast<uint64_t>(send_result.error()) << std::endl;
-      }
-
-      auto notify_result = iox2_request_notifier->notify();
-      if (!notify_result.has_value()) {
-        std::cout << "Could not send Request! Error: " << static_cast<uint64_t>(notify_result.error()) << std::endl;
-      }
+      send_request_iox2(builder);
     }
 #endif
 
@@ -687,6 +760,10 @@ bool TraceExecutorShmem::synchronize(CudaTrace &cuda_trace)
       // iceoryx2: direct waitset/poll in main thread
       while(last_synchronized != last_sent) {
         receive_pending_responses(true);
+        if (last_synchronized != last_sent && !server_connected()) {
+          fatal(fmt::format("the gpuless server disappeared; requests {}..{} are unanswered",
+                            last_synchronized + 1, last_sent));
+        }
         SPDLOG_INFO("Synchronized, now position synchronized {}, last sent {}", last_synchronized, last_sent);
         //spdlog::info("Synchronized, now position synchronized {}, last sent {}", last_synchronized, last_sent);
 
@@ -736,6 +813,11 @@ bool TraceExecutorShmem::getDeviceAttributes() {
         CreateFBProtocolMessage(builder, FBMessage_FBTraceAttributeRequest,
                                 CreateFBTraceAttributeRequest(builder).Union());
     builder.Finish(attr_request);
+
+    // First request of this client: make sure the server can receive it.
+    if (!wait_for_server()) {
+      return false;
+    }
 
     // iceoryx1 path
     if (_ipc_backend == mignificient::ipc::IPCBackend::ICEORYX_V1) {
@@ -793,7 +875,10 @@ bool TraceExecutorShmem::getDeviceAttributes() {
           for (const auto &a : *fb_trace_attribute_response->device_attributes()) {
               int32_t value = a->value();
               auto dev_attr = static_cast<CUdevice_attribute>(a->device_attribute());
-              this->device_attributes[dev_attr] = value;
+              // The server may be built with a newer CUDA (more attributes) than this client.
+              if (static_cast<size_t>(dev_attr) < this->device_attributes.size()) {
+                  this->device_attributes[dev_attr] = value;
+              }
           }
 
           //client->releaseResponse(responsePayload);
@@ -811,30 +896,7 @@ bool TraceExecutorShmem::getDeviceAttributes() {
     else if (_ipc_backend == mignificient::ipc::IPCBackend::ICEORYX_V2) {
       SPDLOG_DEBUG("FBTraceAttributeRequest sent (iceoryx2)");
 
-      // Send request with iceoryx2
-      auto sample = iox2_request_publisher->loan_slice_uninit(builder.GetSize());
-      if (!sample.has_value()) {
-        spdlog::error("iceoryx2: Could not allocate Request! Error: {}", static_cast<uint64_t>(sample.error()));
-      }
-
-      auto payload = sample.value().payload_mut();
-      std::memcpy(payload.data(), builder.GetBufferPointer(), builder.GetSize());
-
-      SPDLOG_INFO("iceoryx2: Submit_request {}", last_sent);
-
-      // Send the request
-      auto initialized_sample = iox2::assume_init(std::move(sample.value()));
-      initialized_sample.user_header_mut() = ++last_sent;
-
-      auto send_result = iox2::send(std::move(initialized_sample));
-      if (!send_result.has_value()) {
-        std::cout << "Could not send Request! Error: " << static_cast<uint64_t>(send_result.error()) << std::endl;
-      }
-
-      auto notify_result = iox2_request_notifier->notify();
-      if (!notify_result.has_value()) {
-        std::cout << "Could not send Request! Error: " << static_cast<uint64_t>(notify_result.error()) << std::endl;
-      }
+      send_request_iox2(builder);
 
       SPDLOG_INFO("FBTraceAttributeResponse wait for receive (iceoryx2)");
 
@@ -864,15 +926,23 @@ bool TraceExecutorShmem::getDeviceAttributes() {
             auto fb_trace_attribute_response =
                 fb_protocol_message_response->message_as_FBTraceAttributeResponse();
 
+            last_synchronized++;
+            if (!fb_trace_attribute_response || !fb_trace_attribute_response->device_attributes()) {
+              spdlog::error("gpuless: expected a device attribute response, got something else");
+              event = iox2_response_listener->try_wait_one();
+              continue;
+            }
+
             this->device_total_mem = fb_trace_attribute_response->total_mem();
             this->device_attributes.resize(CU_DEVICE_ATTRIBUTE_MAX);
             for (const auto &a : *fb_trace_attribute_response->device_attributes()) {
                 int32_t value = a->value();
                 auto dev_attr = static_cast<CUdevice_attribute>(a->device_attribute());
-                this->device_attributes[dev_attr] = value;
+                // The server may be built with a newer CUDA (more attributes) than this client.
+                if (static_cast<size_t>(dev_attr) < this->device_attributes.size()) {
+                    this->device_attributes[dev_attr] = value;
+                }
             }
-
-            last_synchronized++;
 
             auto e1 = std::chrono::high_resolution_clock::now();
             auto d1 = std::chrono::duration_cast<std::chrono::microseconds>(e1 - std::chrono::high_resolution_clock::now()).count() / 1000000.0;
@@ -888,11 +958,40 @@ bool TraceExecutorShmem::getDeviceAttributes() {
         return iox2::CallbackProgression::Continue;
       };
 
-      auto loop_result = waitset.wait_and_process_once(on_event);
-      if (!loop_result.has_value()) {
-        spdlog::error("iceoryx2: WaitSet loop error: {}", static_cast<uint64_t>(loop_result.error()));
+      // Only a received attribute response counts as success. No fixed
+      // deadline here: the server holds requests until the orchestrator
+      // enables execution (first invocation), which can take arbitrarily long.
+      // Fail only when the server is gone; check that once per second.
+      // Note: a server that exits cleanly removes its ports and is detected;
+      // a crashed (SIGKILL/SIGSEGV) server leaves stale ports in the iceoryx2
+      // dynamic config, so that case still waits (the orchestrator's function
+      // timeout covers it).
+      auto start = std::chrono::steady_clock::now();
+      auto next_warning = SERVER_WAIT_LIMIT;
+      while (last_synchronized < last_sent) {
+        auto loop_result = waitset.wait_and_process_once_with_timeout(
+            on_event, iox2::bb::Duration::from_secs(1));
+        if (!loop_result.has_value()) {
+          spdlog::error("iceoryx2: WaitSet loop error: {}", static_cast<uint64_t>(loop_result.error()));
+        }
+        if (last_synchronized >= last_sent) {
+          break;
+        }
+        if (!server_connected()) {
+          spdlog::error("gpuless: the gpuless server disappeared before answering the device attribute request");
+          return false;
+        }
+        if (std::chrono::steady_clock::now() - start >= next_warning) {
+          spdlog::warn("gpuless: still waiting for the device attribute response after {} s",
+                       next_warning.count());
+          next_warning += SERVER_WAIT_LIMIT;
+        }
       }
 
+      if (this->device_attributes.empty()) {
+        spdlog::error("gpuless: the device attribute response carried no attributes");
+        return false;
+      }
       return true;
     }
 #endif

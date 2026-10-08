@@ -1,7 +1,9 @@
 #ifndef GPULESS_SHMEM_MEMPOOL_HPP
 #define GPULESS_SHMEM_MEMPOOL_HPP
 
+#include <cstdlib>
 #include <queue>
+#include <string>
 #include <iostream>
 #include <unordered_map>
 
@@ -15,6 +17,20 @@
 
 namespace gpuless {
 
+// Chunk names look like "/gpuless_<user>_<n>". They are files in the client's own iceoryx2
+// directory ($MIGNIFICIENT_IOX2_ROOT, set by the orchestrator; the only shared directory a
+// container gets), or POSIX shm in /dev/shm without it.
+inline std::string chunk_path(const std::string& name)
+{
+    const char* root = std::getenv("MIGNIFICIENT_IOX2_ROOT");
+    return std::string{root ? root : "/dev/shm"} + name;
+}
+
+inline int chunk_open(const std::string& name, int flags, mode_t mode = 0)
+{
+    return ::open(chunk_path(name).c_str(), flags | O_CLOEXEC | O_NOFOLLOW, mode);
+}
+
 struct MemChunk {
 
     // Standard size of a memory chunk
@@ -26,7 +42,7 @@ struct MemChunk {
     void allocate(size_t size = CHUNK_SIZE)
     {
         //int fd = shm_open(name.c_str(), O_CREAT | O_EXCL | O_RDWR, 0600);
-        int fd = shm_open(name.c_str(), O_CREAT | O_RDWR, 0600);
+        int fd = chunk_open(name, O_CREAT | O_RDWR, 0600);
         if(fd == -1) {
           spdlog::error("Fatal error in shm_open! {}", strerror(errno));
           abort();
@@ -40,27 +56,22 @@ struct MemChunk {
         //std::cerr << fd << " " << " " << size << " " << ret << " " << errno << std::endl;
 
         ptr = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-        if(ptr == (void*)-1) {
+        if(ptr == MAP_FAILED) {
           spdlog::error("Fatal error in mmap! {}", strerror(errno));
           abort();
         }
+        ::close(fd);
         //std::cerr << "allocate " << name << " " << size << " " << errno << " " << reinterpret_cast<std::uintptr_t>(ptr) << std::endl;
 
         this->size = size;
     }
 
-    void open()
-    {
-        //std::cerr << "open " << name << std::endl;
-        int fd = shm_open(name.c_str(), O_RDWR, 0);
-        ptr = mmap(NULL, CHUNK_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-    }
-
+    // The client creates the chunks, so it removes them; the server unlinks the ones it opened too
+    // (MemPoolRead::close), whoever exits first.
     void close()
     {
-        //std::cerr << "Close " << name << std::endl;
-        munmap(ptr, CHUNK_SIZE);
-        //shm_unlink(name.c_str());
+        munmap(ptr, size);
+        unlink(chunk_path(name).c_str());
     }
 };
 
@@ -76,17 +87,22 @@ public:
       auto it = used_chunks.find(name);
       if(it == used_chunks.end()) {
 
-        int fd = shm_open(name.c_str(), O_RDWR, 0);
+        int fd = chunk_open(name, O_RDWR);
         if(fd == -1) {
           spdlog::error("Fatal error of {} in shm_open! {}", name, strerror(errno));
           abort();
         }
 
         struct stat st;
-        fstat(fd, &st);
-
-        //auto ptr = mmap(NULL, MemChunk::CHUNK_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-        auto ptr = mmap(NULL, st.st_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+        void* ptr = MAP_FAILED;
+        if(fstat(fd, &st) == 0) {
+          ptr = mmap(NULL, st.st_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+        }
+        ::close(fd);
+        if(ptr == MAP_FAILED) {
+          spdlog::error("Fatal error of {} in mmap! {}", name, strerror(errno));
+          abort();
+        }
 
         //std::cerr << "open " << name << " " << fd << " " << ptr << std::endl;
         used_chunks[name] = ptr;
@@ -101,7 +117,7 @@ public:
     void close()
     {
       for(auto & name: names) {
-        shm_unlink(name.c_str());
+        unlink(chunk_path(name).c_str());
       }
     }
 

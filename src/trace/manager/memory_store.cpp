@@ -10,7 +10,6 @@ MemoryStore::MemoryStore()
   for (int i = 0; i < numStreams; ++i) {
     cudaStreamCreate(&streams[i]);
   }
-  _my_pid = getpid();
 
   // Start background thread for "likely" checks
   _bg_thread = std::thread(&MemoryStore::_bg_thread_func, this);
@@ -317,6 +316,58 @@ void MemoryStore::on_free(size_t size)
   --_current_count;
 }
 
+bool MemoryStore::_nvml_handle(const std::string& device, nvmlDevice_t* handle)
+{
+  nvmlReturn_t ret;
+  if (device.find_first_not_of("0123456789") == std::string::npos) {
+    ret = nvmlDeviceGetHandleByIndex_v2(std::stoul(device), handle);
+  } else {
+    ret = nvmlDeviceGetHandleByUUID(device.c_str(), handle);
+  }
+  if (ret != NVML_SUCCESS) {
+    spdlog::error("NVML get device handle for {} failed: {}", device, nvmlErrorString(ret));
+    return false;
+  }
+  // A MIG device doesn't list processes; its parent GPU does, with per-process memory.
+  unsigned int is_mig = 0;
+  if (nvmlDeviceIsMigDeviceHandle(*handle, &is_mig) == NVML_SUCCESS && is_mig) {
+    ret = nvmlDeviceGetDeviceHandleFromMigDeviceHandle(*handle, handle);
+    if (ret != NVML_SUCCESS) {
+      spdlog::error("NVML parent of MIG device {} failed: {}", device, nvmlErrorString(ret));
+      return false;
+    }
+  }
+  return true;
+}
+
+unsigned long long MemoryStore::_nvml_process_memory(nvmlDevice_t device)
+{
+  unsigned int process_count = 64;
+  nvmlProcessInfo_t processes[64];
+  nvmlReturn_t ret = nvmlDeviceGetComputeRunningProcesses_v3(device, &process_count, processes);
+  if (ret != NVML_SUCCESS) {
+    spdlog::error("NVML get running processes failed: {}", nvmlErrorString(ret));
+    return 0;
+  }
+  for (unsigned int i = 0; i < process_count; ++i) {
+    if (processes[i].pid == static_cast<unsigned int>(getpid())) {
+      return processes[i].usedGpuMemory;
+    }
+  }
+  return 0;
+}
+
+unsigned long long MemoryStore::nvml_process_memory(const std::string& device)
+{
+  nvmlDevice_t handle;
+  if (nvmlInit_v2() != NVML_SUCCESS || !_nvml_handle(device, &handle)) {
+    return 0;
+  }
+  auto mem = _nvml_process_memory(handle);
+  nvmlShutdown();
+  return mem;
+}
+
 bool MemoryStore::_check_nvml_initialized()
 {
   if (!_nvml_initialized) {
@@ -325,9 +376,7 @@ bool MemoryStore::_check_nvml_initialized()
       spdlog::error("NVML init failed: {}", nvmlErrorString(ret));
       return false;
     }
-    ret = nvmlDeviceGetHandleByIndex_v2(0, &_nvml_device);
-    if (ret != NVML_SUCCESS) {
-      spdlog::error("NVML get device handle failed: {}", nvmlErrorString(ret));
+    if (!_nvml_handle(_nvml_device_id, &_nvml_device)) {
       return false;
     }
     _nvml_initialized = true;
@@ -338,21 +387,7 @@ bool MemoryStore::_check_nvml_initialized()
 std::tuple<unsigned long long, double> MemoryStore::_nvml_used_memory() const
 {
   auto t_start = std::chrono::high_resolution_clock::now();
-  unsigned int process_count = 64;
-  nvmlProcessInfo_t processes[64];
-  nvmlReturn_t ret = nvmlDeviceGetComputeRunningProcesses_v3(_nvml_device, &process_count, processes);
-  if (ret != NVML_SUCCESS) {
-    spdlog::error("NVML get running processes failed: {}", nvmlErrorString(ret));
-    return std::make_tuple(0, 0);
-  }
-
-  unsigned long long nvml_gpu_memory = 0;
-  for (unsigned int i = 0; i < process_count; ++i) {
-    if (processes[i].pid == static_cast<unsigned int>(_my_pid)) {
-      nvml_gpu_memory = processes[i].usedGpuMemory;
-      break;
-    }
-  }
+  unsigned long long nvml_gpu_memory = _nvml_process_memory(_nvml_device);
   auto t_end = std::chrono::high_resolution_clock::now();
 
   return std::make_tuple(

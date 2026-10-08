@@ -10,10 +10,15 @@
 namespace gpuless {
 
 std::string gpuless::CudaCudnnApiCall::nativeErrorToString(uint64_t err) {
-    auto str =
-        "[cudnn] " +
-        std::string(cudnnGetErrorString(static_cast<cudnnStatus_t>(err)));
-    return str;
+    // Resolved at runtime: libgpuless must not link cuDNN, so the function
+    // package's own cuDNN wins the libcudnn.so.8 soname.
+    static auto real = (decltype(&cudnnGetErrorString))real_dlsym(
+        RTLD_DEFAULT, "cudnnGetErrorString");
+    if (real == nullptr) {
+        return "[cudnn] error " + std::to_string(err);
+    }
+    return "[cudnn] " +
+           std::string(real(static_cast<cudnnStatus_t>(err)));
 }
 
 /*

@@ -1,4 +1,5 @@
 #include "iostream"
+#include <algorithm>
 #include <cuda_runtime.h>
 #include <dlfcn.h>
 #include <spdlog/spdlog.h>
@@ -614,8 +615,18 @@ uint64_t CudaGetDeviceProperties::executeNative(CudaVirtualDevice &vdev) {
 CudaGetDeviceProperties::CudaGetDeviceProperties(
     const FBCudaApiCall *fb_cuda_api_call) {
     auto c = fb_cuda_api_call->api_call_as_FBCudaGetDeviceProperties();
-    std::memcpy(&this->properties, c->properties_data()->data(),
-                sizeof(cudaDeviceProp));
+    // The server may use another CUDA version with a different struct size.
+    auto data = c->properties_data();
+    size_t len = data ? data->size() : 0;
+    if (len != sizeof(cudaDeviceProp)) {
+        spdlog::warn("cudaDeviceProp size mismatch: received {} bytes, expected {}",
+                     len, sizeof(cudaDeviceProp));
+    }
+    std::memset(&this->properties, 0, sizeof(cudaDeviceProp));
+    if (len > 0) {
+        std::memcpy(&this->properties, data->data(),
+                    std::min(len, sizeof(cudaDeviceProp)));
+    }
 }
 
 flatbuffers::Offset<FBCudaApiCall>

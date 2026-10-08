@@ -3,6 +3,9 @@ project(gpuless)
 
 enable_language(CUDA)
 find_package(CUDAToolkit 11.4)
+if(NOT CUDAToolkit_VERSION VERSION_GREATER_EQUAL 11.6 OR CUDAToolkit_VERSION VERSION_GREATER_EQUAL 11.7)
+    message(WARNING "CUDA ${CUDAToolkit_VERSION} found; containers and conda PyTorch packages use 11.6, and a mismatch has caused device-attribute overflows; configure with CUDAToolkit_ROOT/CMAKE_CUDA_COMPILER pointing to 11.6")
+endif()
 
 set(CUDNN_DIR "" CACHE STRING "")
 
@@ -213,7 +216,6 @@ add_dependencies(gpuless spdlog)
 target_link_libraries(gpuless
     iberty
     stdc++fs
-    cudnn
     spdlog::spdlog
     CUDA::cuda_driver
     CUDA::cudart

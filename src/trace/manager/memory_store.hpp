@@ -76,6 +76,10 @@ struct MemoryStore
   void shutdown_background_thread();
   void check_memory_final();
   void set_max_memory(unsigned long long max_bytes);
+  // The device NVML reports on: GPU or MIG UUID (as in CUDA_VISIBLE_DEVICES) or an index.
+  void set_nvml_device(const std::string& device) { _nvml_device_id = device; }
+  // This process's memory on `device` without a MemoryStore (its constructor already creates CUDA streams).
+  static unsigned long long nvml_process_memory(const std::string& device);
   bool is_oom() const { return _oom_detected.load(std::memory_order_acquire); }
 
   // Legacy API - kept for backward compatibility
@@ -118,6 +122,8 @@ struct MemoryStore
 private:
 
   bool _check_nvml_initialized();
+  static bool _nvml_handle(const std::string& device, nvmlDevice_t* handle);
+  static unsigned long long _nvml_process_memory(nvmlDevice_t device);
   std::tuple<unsigned long long, double> _nvml_used_memory() const;
 
   void on_malloc(size_t size);
@@ -140,6 +146,7 @@ private:
   // NVML state
   bool _nvml_initialized = false;
   nvmlDevice_t _nvml_device{};
+  std::string _nvml_device_id = "0";
   unsigned long long _nvml_gpu_memory = 0;
   unsigned long long _nvml_gpu_memory_wo_mallocs = 0;
   double _nvml_time_us = 0;
@@ -164,7 +171,6 @@ private:
   static const int numStreams = 32;
   cudaStream_t streams[numStreams];
 
-  pid_t _my_pid;
 
   MemoryStore();
 
