@@ -63,7 +63,10 @@ enum class GPUlessMessage {
   SWAP_IN_CONFIRM = 12,
 
   OUT_OF_MEMORY = 13,
-  INVOCATION_FINISH = 14
+  INVOCATION_FINISH = 14,
+
+  // BANDWIDTH_SHARE + n: n clients with an invocation in flight on this GPU (BandwidthLimiter).
+  BANDWIDTH_SHARE = 64
 };
 
 

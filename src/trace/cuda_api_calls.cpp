@@ -4,6 +4,7 @@
 #include <dlfcn.h>
 #include <spdlog/spdlog.h>
 
+#include "bandwidth_limiter.hpp"
 #include "cuda_api_calls.hpp"
 #include "dlsym_util.hpp"
 #include "libgpuless.hpp"
@@ -75,8 +76,11 @@ uint64_t CudaMemcpyH2D::executeNative(CudaVirtualDevice &vdev) {
     static auto real =
         (decltype(&cudaMemcpy))real_dlsym(RTLD_NEXT, "cudaMemcpy");
 
-    auto val = real(this->dst, this->buffer_ptr, this->size, cudaMemcpyHostToDevice);
-    return val;
+    auto* dst = static_cast<char*>(this->dst);
+    auto* src = reinterpret_cast<const char*>(this->buffer_ptr);
+    return BandwidthLimiter::instance().copy(BandwidthLimiter::H2D, this->size, [&](size_t off, size_t n) {
+        return real(dst + off, src + off, n, cudaMemcpyHostToDevice);
+    });
 }
 
 flatbuffers::Offset<FBCudaApiCall>
@@ -131,8 +135,11 @@ CudaMemcpyD2H::CudaMemcpyD2H(void *dst, const void *src, size_t size, std::strin
 uint64_t CudaMemcpyD2H::executeNative(CudaVirtualDevice &vdev) {
     static auto real =
         (decltype(&cudaMemcpy))real_dlsym(RTLD_NEXT, "cudaMemcpy");
-    return real(this->buffer_ptr, this->src, this->size,
-                cudaMemcpyDeviceToHost);
+    auto* dst = reinterpret_cast<char*>(this->buffer_ptr);
+    auto* src = static_cast<const char*>(this->src);
+    return BandwidthLimiter::instance().copy(BandwidthLimiter::D2H, this->size, [&](size_t off, size_t n) {
+        return real(dst + off, src + off, n, cudaMemcpyDeviceToHost);
+    });
 }
 
 flatbuffers::Offset<FBCudaApiCall>
@@ -227,8 +234,11 @@ CudaMemcpyAsyncH2D::CudaMemcpyAsyncH2D(void *dst, const void *src, size_t size,
 uint64_t CudaMemcpyAsyncH2D::executeNative(CudaVirtualDevice &vdev) {
     static auto real =
         (decltype(&cudaMemcpyAsync))real_dlsym(RTLD_NEXT, "cudaMemcpyAsync");
-    return real(this->dst, this->buffer_ptr, this->size,
-                cudaMemcpyHostToDevice, this->stream);
+    auto* dst = static_cast<char*>(this->dst);
+    auto* src = reinterpret_cast<const char*>(this->buffer_ptr);
+    return BandwidthLimiter::instance().copy(BandwidthLimiter::H2D, this->size, [&](size_t off, size_t n) {
+        return real(dst + off, src + off, n, cudaMemcpyHostToDevice, this->stream);
+    });
 }
 
 flatbuffers::Offset<FBCudaApiCall>
@@ -287,8 +297,11 @@ CudaMemcpyAsyncD2H::CudaMemcpyAsyncD2H(void *dst, const void *src, size_t size,
 uint64_t CudaMemcpyAsyncD2H::executeNative(CudaVirtualDevice &vdev) {
     static auto real =
         (decltype(&cudaMemcpyAsync))real_dlsym(RTLD_NEXT, "cudaMemcpyAsync");
-    return real(this->buffer_ptr, this->src, this->size,
-                cudaMemcpyDeviceToHost, this->stream);
+    auto* dst = reinterpret_cast<char*>(this->buffer_ptr);
+    auto* src = static_cast<const char*>(this->src);
+    return BandwidthLimiter::instance().copy(BandwidthLimiter::D2H, this->size, [&](size_t off, size_t n) {
+        return real(dst + off, src + off, n, cudaMemcpyDeviceToHost, this->stream);
+    });
 }
 
 flatbuffers::Offset<FBCudaApiCall>

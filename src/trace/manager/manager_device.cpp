@@ -35,6 +35,7 @@
 #include "iceoryx_posh/popo/publisher.hpp"
 #include "iceoryx_posh/popo/subscriber.hpp"
 #include "manager_device.hpp"
+#include "../bandwidth_limiter.hpp"
 #include "memory_store.hpp"
 #include "../cudnn_api_calls.hpp"
 #include "../cublas_api_calls.hpp"
@@ -665,7 +666,9 @@ void ShmemServer::loop_wait(const char *user_name) {
           spdlog::error("Message from the orchestrator! Code {}", code);
 
           auto &instance = ExecutionStatus::instance();
-          if (code == static_cast<int>(GPUlessMessage::LOCK_DEVICE)) {
+          if (code >= static_cast<int>(GPUlessMessage::BANDWIDTH_SHARE)) {
+              BandwidthLimiter::instance().set_clients(code - static_cast<int>(GPUlessMessage::BANDWIDTH_SHARE));
+            } else if (code == static_cast<int>(GPUlessMessage::LOCK_DEVICE)) {
             instance.lock();
           } else if (code == static_cast<int>(GPUlessMessage::BASIC_EXEC)) {
             instance.basic_exec();
@@ -842,7 +845,9 @@ void ShmemServer::loop(const char *user_name) {
       int code = *orch_val->get();
       spdlog::error("Message from the orchestrator! Code {}", code);
 
-      if (code == static_cast<int>(GPUlessMessage::LOCK_DEVICE)) {
+      if (code >= static_cast<int>(GPUlessMessage::BANDWIDTH_SHARE)) {
+              BandwidthLimiter::instance().set_clients(code - static_cast<int>(GPUlessMessage::BANDWIDTH_SHARE));
+            } else if (code == static_cast<int>(GPUlessMessage::LOCK_DEVICE)) {
         instance.lock();
       } else if (code == static_cast<int>(GPUlessMessage::BASIC_EXEC)) {
         instance.basic_exec();
@@ -1152,7 +1157,9 @@ void ShmemServer::loop_wait_v2(const char *user_name) {
           spdlog::error("Message from the orchestrator! Code {}", code);
 
             auto &instance = ExecutionStatus::instance();
-            if (code == static_cast<int>(GPUlessMessage::LOCK_DEVICE)) {
+            if (code >= static_cast<int>(GPUlessMessage::BANDWIDTH_SHARE)) {
+              BandwidthLimiter::instance().set_clients(code - static_cast<int>(GPUlessMessage::BANDWIDTH_SHARE));
+            } else if (code == static_cast<int>(GPUlessMessage::LOCK_DEVICE)) {
               instance.lock();
             } else if (code == static_cast<int>(GPUlessMessage::BASIC_EXEC)) {
               instance.basic_exec();
