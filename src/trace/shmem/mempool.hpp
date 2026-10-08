@@ -153,6 +153,12 @@ public:
     void give(const std::string& name)
     {
       SPDLOG_INFO("Give back chunk {}", name);
+      // A mignificient_malloc chunk used as a copy source stays with the function until mignificient_free.
+      for(const auto& [ptr, chunk] : borrowed_chunks) {
+        if(chunk.name == name) {
+          return;
+        }
+      }
       bool inserted = false;
       auto it = used_chunks.find(name);
       if(it == used_chunks.end()) {
