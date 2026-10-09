@@ -44,6 +44,9 @@ struct FBCudaFreeBuilder;
 struct FBCudaStreamSynchronize;
 struct FBCudaStreamSynchronizeBuilder;
 
+struct FBCudaMemsetAsync;
+struct FBCudaMemsetAsyncBuilder;
+
 struct FBCudaGetDeviceProperties;
 struct FBCudaGetDevicePropertiesBuilder;
 
@@ -1158,6 +1161,77 @@ inline flatbuffers::Offset<FBCudaStreamSynchronize> CreateFBCudaStreamSynchroniz
     uint64_t stream = 0) {
   FBCudaStreamSynchronizeBuilder builder_(_fbb);
   builder_.add_stream(stream);
+  return builder_.Finish();
+}
+
+struct FBCudaMemsetAsync FLATBUFFERS_FINAL_CLASS : private flatbuffers::Table {
+  typedef FBCudaMemsetAsyncBuilder Builder;
+  enum FlatBuffersVTableOffset FLATBUFFERS_VTABLE_UNDERLYING_TYPE {
+    VT_DEV_PTR = 4,
+    VT_VALUE = 6,
+    VT_SIZE = 8,
+    VT_STREAM = 10
+  };
+  uint64_t dev_ptr() const {
+    return GetField<uint64_t>(VT_DEV_PTR, 0);
+  }
+  int32_t value() const {
+    return GetField<int32_t>(VT_VALUE, 0);
+  }
+  uint64_t size() const {
+    return GetField<uint64_t>(VT_SIZE, 0);
+  }
+  uint64_t stream() const {
+    return GetField<uint64_t>(VT_STREAM, 0);
+  }
+  bool Verify(flatbuffers::Verifier &verifier) const {
+    return VerifyTableStart(verifier) &&
+           VerifyField<uint64_t>(verifier, VT_DEV_PTR) &&
+           VerifyField<int32_t>(verifier, VT_VALUE) &&
+           VerifyField<uint64_t>(verifier, VT_SIZE) &&
+           VerifyField<uint64_t>(verifier, VT_STREAM) &&
+           verifier.EndTable();
+  }
+};
+
+struct FBCudaMemsetAsyncBuilder {
+  typedef FBCudaMemsetAsync Table;
+  flatbuffers::FlatBufferBuilder &fbb_;
+  flatbuffers::uoffset_t start_;
+  void add_dev_ptr(uint64_t dev_ptr) {
+    fbb_.AddElement<uint64_t>(FBCudaMemsetAsync::VT_DEV_PTR, dev_ptr, 0);
+  }
+  void add_value(int32_t value) {
+    fbb_.AddElement<int32_t>(FBCudaMemsetAsync::VT_VALUE, value, 0);
+  }
+  void add_size(uint64_t size) {
+    fbb_.AddElement<uint64_t>(FBCudaMemsetAsync::VT_SIZE, size, 0);
+  }
+  void add_stream(uint64_t stream) {
+    fbb_.AddElement<uint64_t>(FBCudaMemsetAsync::VT_STREAM, stream, 0);
+  }
+  explicit FBCudaMemsetAsyncBuilder(flatbuffers::FlatBufferBuilder &_fbb)
+        : fbb_(_fbb) {
+    start_ = fbb_.StartTable();
+  }
+  flatbuffers::Offset<FBCudaMemsetAsync> Finish() {
+    const auto end = fbb_.EndTable(start_);
+    auto o = flatbuffers::Offset<FBCudaMemsetAsync>(end);
+    return o;
+  }
+};
+
+inline flatbuffers::Offset<FBCudaMemsetAsync> CreateFBCudaMemsetAsync(
+    flatbuffers::FlatBufferBuilder &_fbb,
+    uint64_t dev_ptr = 0,
+    int32_t value = 0,
+    uint64_t size = 0,
+    uint64_t stream = 0) {
+  FBCudaMemsetAsyncBuilder builder_(_fbb);
+  builder_.add_stream(stream);
+  builder_.add_size(size);
+  builder_.add_dev_ptr(dev_ptr);
+  builder_.add_value(value);
   return builder_.Finish();
 }
 

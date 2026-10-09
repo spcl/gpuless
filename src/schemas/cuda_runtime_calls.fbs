@@ -109,6 +109,13 @@ table FBCudaStreamSynchronize {
     stream:uint64;
 }
 
+table FBCudaMemsetAsync {
+    dev_ptr:uint64;
+    value:int32;
+    size:uint64;
+    stream:uint64;
+}
+
 table FBCudaGetDeviceProperties {
     properties_data:[uint8];
 }

@@ -67,6 +67,9 @@ union FBCudaApiCallUnion {
     FBCudnnGetBatchNormalizationForwardTrainingExWorkspaceSize,
     FBCudnnGetBatchNormalizationTrainingExReserveSpaceSize,
     FBCudnnBatchNormalizationForwardTrainingEx,
+
+    // appended: keeps the existing type ids
+    FBCudaMemsetAsync,
 }
 
 table FBCudaApiCall {

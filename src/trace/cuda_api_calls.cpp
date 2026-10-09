@@ -616,6 +616,32 @@ CudaStreamSynchronize::CudaStreamSynchronize(
 }
 
 /*
+ * cudaMemsetAsync
+ */
+CudaMemsetAsync::CudaMemsetAsync(void *devPtr, int value, size_t size, cudaStream_t stream)
+    : devPtr(devPtr), value(value), size(size), stream(stream) {}
+
+uint64_t CudaMemsetAsync::executeNative(CudaVirtualDevice &vdev) {
+    static auto real = (decltype(&cudaMemsetAsync))real_dlsym(RTLD_NEXT, "cudaMemsetAsync");
+    return real(this->devPtr, this->value, this->size, this->stream);
+}
+
+flatbuffers::Offset<FBCudaApiCall>
+CudaMemsetAsync::fbSerialize(flatbuffers::FlatBufferBuilder &builder) {
+    auto api_call = CreateFBCudaMemsetAsync(builder, reinterpret_cast<uint64_t>(this->devPtr), this->value,
+                                            this->size, reinterpret_cast<uint64_t>(this->stream));
+    return CreateFBCudaApiCall(builder, FBCudaApiCallUnion_FBCudaMemsetAsync, api_call.Union());
+}
+
+CudaMemsetAsync::CudaMemsetAsync(const FBCudaApiCall *fb_cuda_api_call) {
+    auto c = fb_cuda_api_call->api_call_as_FBCudaMemsetAsync();
+    this->devPtr = reinterpret_cast<void *>(c->dev_ptr());
+    this->value = c->value();
+    this->size = c->size();
+    this->stream = reinterpret_cast<cudaStream_t>(c->stream());
+}
+
+/*
  * cudaGetDeviceProperties
  */
 CudaGetDeviceProperties::CudaGetDeviceProperties() = default;

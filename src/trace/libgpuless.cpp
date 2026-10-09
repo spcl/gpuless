@@ -525,6 +525,21 @@ cudaError_t cudaMemcpyAsync(void *dst, const void *src, size_t count,
     return cudaSuccess;
 }
 
+cudaError_t cudaMemsetAsync(void *devPtr, int value, size_t count, cudaStream_t stream) {
+    hijackInit();
+    HIJACK_FN_PROLOGUE();
+    getCudaTrace().record(std::make_shared<CudaMemsetAsync>(devPtr, value, count, stream));
+    return cudaSuccess;
+}
+
+// Asynchronous to the host for device memory, like CUDA's; ordered with everything else in the trace.
+cudaError_t cudaMemset(void *devPtr, int value, size_t count) {
+    hijackInit();
+    HIJACK_FN_PROLOGUE();
+    getCudaTrace().record(std::make_shared<CudaMemsetAsync>(devPtr, value, count, nullptr));
+    return cudaSuccess;
+}
+
 cudaError_t cudaLaunchKernel(const void *func, dim3 gridDim, dim3 blockDim,
                              void **args, size_t sharedMem,
                              cudaStream_t stream) {

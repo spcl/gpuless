@@ -251,6 +251,25 @@ class CudaStreamSynchronize : public CudaRuntimeApiCall {
     fbSerialize(flatbuffers::FlatBufferBuilder &builder) override;
 };
 
+// cudaMemset and cudaMemsetAsync
+class CudaMemsetAsync : public CudaRuntimeApiCall {
+  public:
+    void *devPtr;
+    int value;
+    size_t size;
+    cudaStream_t stream;
+
+    CudaMemsetAsync(void *devPtr, int value, size_t size, cudaStream_t stream);
+    explicit CudaMemsetAsync(const FBCudaApiCall *fb_cuda_api_call);
+
+    uint64_t executeNative(CudaVirtualDevice &vdev) override;
+
+    virtual bool is_memop() override { return true; }
+
+    flatbuffers::Offset<FBCudaApiCall>
+    fbSerialize(flatbuffers::FlatBufferBuilder &builder) override;
+};
+
 class CudaGetDeviceProperties : public CudaRuntimeApiCall {
   public:
     cudaDeviceProp properties{};

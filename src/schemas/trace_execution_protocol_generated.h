@@ -120,11 +120,12 @@ enum FBCudaApiCallUnion : uint8_t {
   FBCudaApiCallUnion_FBCudnnGetBatchNormalizationForwardTrainingExWorkspaceSize = 49,
   FBCudaApiCallUnion_FBCudnnGetBatchNormalizationTrainingExReserveSpaceSize = 50,
   FBCudaApiCallUnion_FBCudnnBatchNormalizationForwardTrainingEx = 51,
+  FBCudaApiCallUnion_FBCudaMemsetAsync = 52,
   FBCudaApiCallUnion_MIN = FBCudaApiCallUnion_NONE,
-  FBCudaApiCallUnion_MAX = FBCudaApiCallUnion_FBCudnnBatchNormalizationForwardTrainingEx
+  FBCudaApiCallUnion_MAX = FBCudaApiCallUnion_FBCudaMemsetAsync
 };
 
-inline const FBCudaApiCallUnion (&EnumValuesFBCudaApiCallUnion())[52] {
+inline const FBCudaApiCallUnion (&EnumValuesFBCudaApiCallUnion())[53] {
   static const FBCudaApiCallUnion values[] = {
     FBCudaApiCallUnion_NONE,
     FBCudaApiCallUnion_FBCudaMalloc,
@@ -177,13 +178,14 @@ inline const FBCudaApiCallUnion (&EnumValuesFBCudaApiCallUnion())[52] {
     FBCudaApiCallUnion_FBCudnnGetConvolutionBackwardDataAlgorithmV7,
     FBCudaApiCallUnion_FBCudnnGetBatchNormalizationForwardTrainingExWorkspaceSize,
     FBCudaApiCallUnion_FBCudnnGetBatchNormalizationTrainingExReserveSpaceSize,
-    FBCudaApiCallUnion_FBCudnnBatchNormalizationForwardTrainingEx
+    FBCudaApiCallUnion_FBCudnnBatchNormalizationForwardTrainingEx,
+    FBCudaApiCallUnion_FBCudaMemsetAsync
   };
   return values;
 }
 
 inline const char * const *EnumNamesFBCudaApiCallUnion() {
-  static const char * const names[53] = {
+  static const char * const names[54] = {
     "NONE",
     "FBCudaMalloc",
     "FBCudaMemcpyH2D",
@@ -236,13 +238,14 @@ inline const char * const *EnumNamesFBCudaApiCallUnion() {
     "FBCudnnGetBatchNormalizationForwardTrainingExWorkspaceSize",
     "FBCudnnGetBatchNormalizationTrainingExReserveSpaceSize",
     "FBCudnnBatchNormalizationForwardTrainingEx",
+    "FBCudaMemsetAsync",
     nullptr
   };
   return names;
 }
 
 inline const char *EnumNameFBCudaApiCallUnion(FBCudaApiCallUnion e) {
-  if (flatbuffers::IsOutRange(e, FBCudaApiCallUnion_NONE, FBCudaApiCallUnion_FBCudnnBatchNormalizationForwardTrainingEx)) return "";
+  if (flatbuffers::IsOutRange(e, FBCudaApiCallUnion_NONE, FBCudaApiCallUnion_FBCudaMemsetAsync)) return "";
   const size_t index = static_cast<size_t>(e);
   return EnumNamesFBCudaApiCallUnion()[index];
 }
@@ -453,6 +456,10 @@ template<> struct FBCudaApiCallUnionTraits<FBCudnnGetBatchNormalizationTrainingE
 
 template<> struct FBCudaApiCallUnionTraits<FBCudnnBatchNormalizationForwardTrainingEx> {
   static const FBCudaApiCallUnion enum_value = FBCudaApiCallUnion_FBCudnnBatchNormalizationForwardTrainingEx;
+};
+
+template<> struct FBCudaApiCallUnionTraits<FBCudaMemsetAsync> {
+  static const FBCudaApiCallUnion enum_value = FBCudaApiCallUnion_FBCudaMemsetAsync;
 };
 
 bool VerifyFBCudaApiCallUnion(flatbuffers::Verifier &verifier, const void *obj, FBCudaApiCallUnion type);
@@ -686,6 +693,9 @@ struct FBCudaApiCall FLATBUFFERS_FINAL_CLASS : private flatbuffers::Table {
   const FBCudnnBatchNormalizationForwardTrainingEx *api_call_as_FBCudnnBatchNormalizationForwardTrainingEx() const {
     return api_call_type() == gpuless::FBCudaApiCallUnion_FBCudnnBatchNormalizationForwardTrainingEx ? static_cast<const FBCudnnBatchNormalizationForwardTrainingEx *>(api_call()) : nullptr;
   }
+  const FBCudaMemsetAsync *api_call_as_FBCudaMemsetAsync() const {
+    return api_call_type() == gpuless::FBCudaApiCallUnion_FBCudaMemsetAsync ? static_cast<const FBCudaMemsetAsync *>(api_call()) : nullptr;
+  }
   bool Verify(flatbuffers::Verifier &verifier) const {
     return VerifyTableStart(verifier) &&
            VerifyField<uint8_t>(verifier, VT_API_CALL_TYPE) &&
@@ -897,6 +907,10 @@ template<> inline const FBCudnnGetBatchNormalizationTrainingExReserveSpaceSize *
 
 template<> inline const FBCudnnBatchNormalizationForwardTrainingEx *FBCudaApiCall::api_call_as<FBCudnnBatchNormalizationForwardTrainingEx>() const {
   return api_call_as_FBCudnnBatchNormalizationForwardTrainingEx();
+}
+
+template<> inline const FBCudaMemsetAsync *FBCudaApiCall::api_call_as<FBCudaMemsetAsync>() const {
+  return api_call_as_FBCudaMemsetAsync();
 }
 
 struct FBCudaApiCallBuilder {
@@ -1583,6 +1597,10 @@ inline bool VerifyFBCudaApiCallUnion(flatbuffers::Verifier &verifier, const void
     }
     case FBCudaApiCallUnion_FBCudnnBatchNormalizationForwardTrainingEx: {
       auto ptr = reinterpret_cast<const FBCudnnBatchNormalizationForwardTrainingEx *>(obj);
+      return verifier.VerifyTable(ptr);
+    }
+    case FBCudaApiCallUnion_FBCudaMemsetAsync: {
+      auto ptr = reinterpret_cast<const FBCudaMemsetAsync *>(obj);
       return verifier.VerifyTable(ptr);
     }
     default: return true;
